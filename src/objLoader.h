@@ -6,18 +6,22 @@
 #include <Eigen/core>
 
 
+
 static std::vector<Eigen::Vector3f> vertices;
 static std::vector<Eigen::Vector3f> normals;
 static std::vector<Eigen::Vector2f> uvs;
 static std::vector<std::vector<float>> faces;
+static std::vector<std::vector<float>>scales;//每个点对应三个缩放
+static std::vector<std::vector<float>>translations;//先把数据存起来再说，但是似乎.obj中并没有旋转和平移的数据啊
+static std::vector<float>rotations;
 
-class ObjLoader {
+class objLoader {
 
     private:
     
 
     public:
-        ObjLoader() = default;
+        objLoader() = default;
 
         static void loadObj(const std::string& filename) {
             std::ifstream file(filename);

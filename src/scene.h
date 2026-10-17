@@ -1,8 +1,9 @@
 #include <vector>
 #include <Eigen/core>
+#include "objLoader.h"
+#include "parameter.h"
 
-constexpr int SCREEN_WIDTH = 800;
-constexpr int SCREEN_HEIGHT = 600;  
+
 class Scene {   
     private:
         int frameBuffer[SCREEN_HEIGHT][SCREEN_WIDTH]; // 颜色缓冲区
@@ -11,7 +12,10 @@ class Scene {
 
         public:
         Scene() {};
-        void init();
+        void init()
+        {
 
-    
+        }
+
+  
 };

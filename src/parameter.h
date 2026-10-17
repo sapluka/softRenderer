@@ -1,0 +1,10 @@
+constexpr float EYE_POS_X = 0.0;
+constexpr float EYE_POS_Y = 0.0;
+constexpr float EYE_POS_Z = 0.0;
+constexpr float z_near = 0.1f;
+constexpr float z_far = 100.0f;
+constexpr float pi = 3.14159;
+constexpr float fov_y = pi/3;
+constexpr float aspect_ratio = 4.0f/3.0f;
+constexpr int SCREEN_WIDTH = 800;
+constexpr int SCREEN_HEIGHT = 600;  
