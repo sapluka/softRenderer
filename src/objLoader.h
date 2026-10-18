@@ -1,13 +1,17 @@
+#pragma once
+
 #include <iostream>
 #include <fstream>
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <sstream>
 #include <Eigen/core>
+#include <map>
 
 
 
-static std::vector<Eigen::Vector3f> vertices;
+static std::unordered_map<int, Eigen::Vector3f>vertices;
 static std::vector<Eigen::Vector3f> normals;
 static std::vector<Eigen::Vector2f> uvs;
 static std::vector<std::vector<float>> faces;
@@ -44,7 +48,8 @@ class objLoader {
             if (prefix == "v") {
                 Eigen::Vector3f vertex;
                 iss >> vertex[0] >> vertex[1] >> vertex[2];
-                vertices.push_back(vertex);
+                vertices.insert({vertices.size(), vertex});
+                //这里我没看懂，得小心，下次留心检查吧
             } else if (prefix == "vn") {
                 Eigen::Vector3f normal;
                 iss >> normal[0] >> normal[1] >> normal[2];

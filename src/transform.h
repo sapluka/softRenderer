@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Eigen/core>
 #include <vector>
 #include "objLoader.h"
@@ -19,6 +21,8 @@ class Transform {
     static Eigen::Matrix4f getProjectionMatrix();
     static Eigen::Vector3f getNDC(const Eigen::Vector4f& clipSpacePoint);
     static Eigen::Matrix4f getViewportMatrix();
+
+    
 
     //我说白了有点乱了，先保持吧
 };

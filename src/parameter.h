@@ -1,3 +1,6 @@
+#pragma once
+#include <cmath>
+
 constexpr float EYE_POS_X = 0.0;
 constexpr float EYE_POS_Y = 0.0;
 constexpr float EYE_POS_Z = 0.0;
