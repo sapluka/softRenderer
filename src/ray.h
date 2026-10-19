@@ -20,4 +20,7 @@ class ray{
         Eigen::Vector3f getDirection() const { return direction; }
         //下面这个函数是状态机思想
         void findIntersectionPoint(Eigen::Vector3f& point0, Eigen::Vector3f& point1, Eigen::Vector3f& point2);
+        bool getIntersect()const {return intersect;};
+        Eigen::Vector3f getIntersectionPoint() const {return intersectionPoint;};
+        
 };

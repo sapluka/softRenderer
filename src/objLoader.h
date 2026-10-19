@@ -1,76 +1,98 @@
 #pragma once
 
-#include <iostream>
-#include <fstream>
-#include <unordered_map>
-#include <vector>
+#include <Eigen/Core>
+#include <array>
+#include <cstddef>
+#include <filesystem>
 #include <string>
-#include <sstream>
-#include <Eigen/core>
-#include <map>
+#include <vector>
 
-
-
-static std::unordered_map<int, Eigen::Vector3f>vertices;
-static std::vector<Eigen::Vector3f> normals;
-static std::vector<Eigen::Vector2f> uvs;
-static std::vector<std::vector<float>> faces;
-static std::vector<std::vector<float>>scales;//每个点对应三个缩放
-static std::vector<std::vector<float>>translations;//先把数据存起来再说，但是似乎.obj中并没有旋转和平移的数据啊
-static std::vector<float>rotations;
-
+// OBJ 的独立索引在读取时处理完，渲染代码只需要使用这些完整的角点。
 class objLoader {
+public:
+    struct Vertex {
+        Eigen::Vector3f position = Eigen::Vector3f::Zero();
+        Eigen::Vector3f normal = Eigen::Vector3f::UnitZ();
+        Eigen::Vector2f uv = Eigen::Vector2f::Zero();
+        Eigen::Vector3f color = Eigen::Vector3f::Ones();
+        bool hasUV = false;
+        bool normalFromFile = false;
+    };
 
-    private:
-    
+    struct TextureMap {
+        std::filesystem::path path;
+        Eigen::Vector3f offset = Eigen::Vector3f::Zero();
+        Eigen::Vector3f scale = Eigen::Vector3f::Ones();
+        bool clamp = false;
+        float strength = 1.0f; // bump 贴图的 -bm 参数。
+    };
 
-    public:
-        objLoader() = default;
+    struct Material {//系数
+        std::string name = "default";
+        Eigen::Vector3f ambient = Eigen::Vector3f::Constant(0.1f); // Ka
+        Eigen::Vector3f diffuse = Eigen::Vector3f::Constant(0.8f); // Kd
+        Eigen::Vector3f specular = Eigen::Vector3f::Zero();        // Ks
+        Eigen::Vector3f emission = Eigen::Vector3f::Zero();        // Ke
+        float shininess = 1.0f;  // Ns
+        float opacity = 1.0f;    // d，1 为不透明。
+        float ior = 1.5f;        // Ni
+        int illuminationModel = 1;
+        float roughness = 0.5f;
+        float metallic = 0.0f;
+        TextureMap diffuseTexture;
+        TextureMap specularTexture;
+        TextureMap emissionTexture;
+        TextureMap normalTexture;
+        TextureMap bumpTexture;
+        TextureMap opacityTexture;
+    };
 
-        static void loadObj(const std::string& filename) {
-            std::ifstream file(filename);
-            if (!file.is_open()) {
-                std::cerr << "Failed to open file: " << filename << std::endl;
-                return;
-            }
-
-            std::string line;
-            while (std::getline(file, line)) {
-                parseObjLine(line);
-            }
+    struct Triangle {
+        std::array<Vertex, 3> vertices;
+        std::size_t materialIndex = 0;
+        std::size_t objectIndex = 0;
+        bool isIntersected = false;
+        bool hasUVs() const noexcept {
+            return vertices[0].hasUV && vertices[1].hasUV && vertices[2].hasUV;
         }
+    };
 
-        static void parseObjLine(const std::string& line) {
-            std::istringstream iss(line);
-            std::string prefix;
-            iss >> prefix;
+    // 对应 tinyobjloader 输出的命名 object/group，不复制全模型的属性数组。
+    struct Object {
+        std::string name;
+        std::vector<std::size_t> triangleIndices;
+    };
 
-            if (prefix == "v") {
-                Eigen::Vector3f vertex;
-                iss >> vertex[0] >> vertex[1] >> vertex[2];
-                vertices.insert({vertices.size(), vertex});
-                //这里我没看懂，得小心，下次留心检查吧
-            } else if (prefix == "vn") {
-                Eigen::Vector3f normal;
-                iss >> normal[0] >> normal[1] >> normal[2];
-                normals.push_back(normal);
-            } else if (prefix == "vt") {
-                Eigen::Vector2f uv;
-                iss >> uv[0] >> uv[1];
-                uvs.push_back(uv);
-            } else if (prefix == "f") {
-                std::vector<float> face;
-                std::string vertexStr;
-                while (iss >> vertexStr) {
-                    std::istringstream viss(vertexStr);
-                    std::string indexStr;
-                    while (std::getline(viss, indexStr, '/')) {
-                        face.push_back(std::stof(indexStr));
-                    }
-                }
-                faces.push_back(face);
-            }
-        }
+    struct Options {
+        // 可选：取这个 MTL 的第一个材质作为默认材质。
+        // 相对路径以 OBJ 所在目录为基准；为空时使用内置灰色材质。
+        std::filesystem::path defaultMaterialFile;
+    };
 
-        //很显然你还需要把.obj拖入窗口的事件给写成函数
+    objLoader();
+
+    // 每次加载替换旧模型。失败时返回 false，模型为空，原因见 error()。
+    bool loadObj(const std::filesystem::path& filename);
+    bool loadObj(const std::filesystem::path& filename, const Options& options);
+    void clear();
+
+    const std::vector<Triangle>& triangles() const noexcept { return triangles_; }
+    const std::vector<Material>& materials() const noexcept { return materials_; }
+    const std::vector<Object>& objects() const noexcept { return objects_; }
+    const Material& materialFor(const Triangle& triangle) const {
+        return materials_.at(triangle.materialIndex);
+    }
+    const Object& objectFor(const Triangle& triangle) const {
+        return objects_.at(triangle.objectIndex);
+    }
+    const std::string& error() const noexcept { return error_; }
+    const std::string& warnings() const noexcept { return warnings_; }
+    bool empty() const noexcept { return triangles_.empty(); }
+
+private:
+    std::vector<Triangle> triangles_;
+    std::vector<Material> materials_;
+    std::vector<Object> objects_;
+    std::string error_;
+    std::string warnings_;
 };

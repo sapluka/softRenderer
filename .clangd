@@ -1,0 +1,11 @@
+# Use the same compilation database as CMake.
+CompileFlags:
+  CompilationDatabase: build
+
+---
+If:
+  PathMatch: '(src|tests)/.*\.(cpp|h|hpp)'
+CompileFlags:
+  # This workspace builds with WinLibs/MinGW. clangd otherwise selects the
+  # installed MSVC toolchain, whose default language mode is C++14.
+  Add: [-std=c++17, --target=x86_64-w64-mingw32]
