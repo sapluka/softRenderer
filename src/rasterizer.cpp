@@ -10,7 +10,7 @@ void rasterizer::initRasterizer() {
     for (int i = 0; i < SCREEN_HEIGHT; ++i) {
         for (int j = 0; j < SCREEN_WIDTH; ++j) {
             frameBuffer[i][j] = Eigen::Array3f(0.0f, 0.0f, 0.0f);
-            zBuffer[i][j] = std::numeric_limits<float>::infinity(); 
+            zBuffer[i][j] = -std::numeric_limits<float>::infinity(); 
             normalBuffer[i][j] = Eigen::Array3f(0.0f, 0.0f, 0.0f);
         }
     }
@@ -20,12 +20,15 @@ void rasterizer::initRasterizer() {
 
 void rasterizer::setGBuffers(const objLoader& model)
 {
+    //坏菜了这个_x,_y好像是硬编码，当我们摄像机位置改变时就不对了
+    //应该根据摄像机的位置和摄像机的direction来计算_x,_y,offset_x,offset_y
+
      float _y = std::tan(fov_y / 2.0f) * z_near;
      float _x = _y * aspect_ratio;
      
      float offset_x = _x/(SCREEN_WIDTH/2.0f);
      float offset_y = _y/(SCREEN_HEIGHT/2.0f);
-
+    //这里得把SCREEN_WIDTH和SCREEN_HEIGHT改成window.getWidth()和window.getHeight()
      Eigen::Vector3f origin (EYE_POS_X,EYE_POS_Y,EYE_POS_Z);
      for(int i = 0; i < SCREEN_HEIGHT; ++i) {
         for (int j = 0; j < SCREEN_WIDTH; ++j) {
@@ -46,29 +49,9 @@ void rasterizer::setGBuffers(const objLoader& model)
                 {
                     IntersectedTriangles.push_back(triangle);
                     //我需要填入zBuffer里面的值到底是打到的点的z值还是三角形的插值？
-                    float alpha ;
-                    float beta ;
-                    float gamma ;
-
-                    Eigen::Vector3f P = r.getIntersectionPoint();
-                    Eigen::Vector3f A = point0;
-                    Eigen::Vector3f B = point1;
-                    Eigen::Vector3f C = point2;
-                    Eigen::Vector3f e_1 = B - A;
-                    Eigen::Vector3f e_2 = C - A;
-                    Eigen::Vector3f q = P - A;
-
-                    float a = e_1.dot(e_1);
-                    float b = e_1.dot(e_2);
-                    float c = e_2.dot(e_2);
-                    float u = e_1.dot(q);
-                    float v = e_2.dot(q);
-
-                    float denom = a * c - b * b;
-
-                    beta = (c * u - b * v) / denom;
-                    gamma = (a * v - b * u) / denom;
-                    alpha = 1.0f - beta - gamma;
+                    float alpha, beta, gamma;
+                    //这里我们把重心坐标的计算封装为一个函数
+                    Transform::computeBarycentric2D(r.getIntersectionPoint(), point0, point1, point2, alpha, beta, gamma);
                     zBuffer[i][j] = alpha * point0.z() + beta * point1.z() + gamma * point2.z();
                     normalBuffer[i][j] = (alpha * triangle.vertices[0].normal
                                        + beta * triangle.vertices[1].normal
@@ -87,34 +70,57 @@ void rasterizer::setGBuffers(const objLoader& model)
     }
 }
 
-void rasterizer::rasterize() {
-    std::vector<float>model_scales = {1.0f, 1.0f, 1.0f};
-    std::vector<float>model_translates = {0.0f, 0.0f, 0.0f};
-    Eigen::Vector3f model_rotation_axis(0.0f, 1.0f, 0.0f);
-    float model_rotation_angle = 0.0f; // 旋转角度，单位为弧度
-    Eigen::Matrix4f model = Transform::getModelMatrix(model_scales, model_translates, model_rotation_axis, model_rotation_angle);
-    Eigen::Matrix4f view = Transform::getViewMatrix(model_translates, model_rotation_axis, model_rotation_angle);
-    Eigen::Matrix4f projection = Transform::getProjectionMatrix();
-    Eigen::Matrix4f viewport = Transform::getViewportMatrix();
+void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target) {
+
+    float _y = std::tan(fov_y / 2.0f) * z_near;
+    float _x = _y * aspect_ratio;
+     //如果我们能把offset,_x,_y都固定就好了，但是有点难，反正是用不了constexpr，要是全局变量或者私有数据还行
+    float offset = _x/(SCREEN_WIDTH/2.0f);
+    
     for(const auto& triangle : IntersectedTriangles) {
 
         std::vector<Eigen::Vector3f>screenTriangle;
 
         for(const auto& vertex : triangle.vertices) {
         //对点进行MVP变换
-        Eigen::Vector4f worldPos(vertex.position.x(), vertex.position.y(), vertex.position.z(), 1.0f);
-        Eigen::Vector4f clipSpacePos = projection * view * model * worldPos;
-        Eigen::Vector3f ndcPos = Transform::getNDC(clipSpacePos);
-        Eigen::Vector4f temp = viewport * Eigen::Vector4f(ndcPos.x(), ndcPos.y(), ndcPos.z(), 1.0f);
-        Eigen::Vector3f screenPos(temp.x() , temp.y() , temp.z() );
+        Eigen::Vector3f screenPos = Transform::transform(vertex.position,eye,target);
         screenTriangle.push_back(screenPos);
 
         //计算着色
         }
+        // 计算屏幕三角形的包围盒(实际坐标)
         float min_x = std::min(screenTriangle[0].x(), std::min(screenTriangle[1].x(), screenTriangle[2].x()));
         float max_x = std::max(screenTriangle[0].x(), std::max(screenTriangle[1].x(), screenTriangle[2].x()));
         float min_y = std::min(screenTriangle[0].y(), std::min(screenTriangle[1].y(), screenTriangle[2].y()));
         float max_y = std::max(screenTriangle[0].y(), std::max(screenTriangle[1].y(), screenTriangle[2].y()));
 
+        // 计算屏幕三角形的包围盒(像素索引)
+        int min_x_index = static_cast<int>(min_x/offset);
+        int max_x_index = static_cast<int>(max_x/offset);
+        int min_y_index = static_cast<int>(min_y/offset);
+        int max_y_index = static_cast<int>(max_y/offset);
+
+        objLoader::Material material = model.materialFor(triangle);
+        for(int i = min_y_index; i <= max_y_index; ++i) {
+            for(int j = min_x_index; j <= max_x_index; ++j) {
+                Eigen::Vector3f P(j + offset/2.0f, i + offset/2.0f, 0.0f);
+                float alpha, beta, gamma;
+                Transform::computeBarycentric2D(P, screenTriangle[0], screenTriangle[1], screenTriangle[2], alpha, beta, gamma);
+                if(alpha >= 0 && beta >= 0 && gamma >= 0) {
+                    float z_interpolated = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
+                    
+                    if(z_interpolated > zBuffer[i][j]) {
+                        zBuffer[i][j] = z_interpolated;
+                        frameBuffer[i][j] = shadeModel.computeShading(material, eye, P, normalBuffer[i][j]);
+                    }
+                }
+            }
+        }
     }
 }
+
+void rasterizer::draw() {
+    // 这里可以使用 OpenGL 或其他图形库将 frameBuffer 显示在屏幕上
+    // 例如，使用 OpenGL 的 glDrawPixels 或者将 frameBuffer 转换为纹理并渲染到屏幕上
+}
+

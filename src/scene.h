@@ -17,5 +17,7 @@ class Scene {
 
         }
 
+        void rotateCamera();
+
   
 };
