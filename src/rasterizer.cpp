@@ -1,27 +1,26 @@
 #include "rasterizer.h"
+#include "objLoader.h"
 #include "parameter.h"
 #include <Eigen/Core>
 #include <Eigen/core>
+#include <unordered_set>
 #include <vector>
 
 
 void rasterizer::initRasterizer() {
-    // 初始化颜色缓冲区为黑色
-    for (int i = 0; i < SCREEN_HEIGHT; ++i) {
-        for (int j = 0; j < SCREEN_WIDTH; ++j) {
-            frameBuffer[i][j] = Eigen::Array3f(0.0f, 0.0f, 0.0f);
-            zBuffer[i][j] = -std::numeric_limits<float>::infinity(); 
-            normalBuffer[i][j] = Eigen::Array3f(0.0f, 0.0f, 0.0f);
-        }
-    }
+    frameBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,Eigen::Vector3f::Zero()));
+    zBuffer.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,-std::numeric_limits<float>::infinity()));
+    normalBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,Eigen::Vector3f::Zero()));
 }
 
 
 
-void rasterizer::setGBuffers(const objLoader& model)
+void rasterizer::setGBuffers(const objLoader& model,const Eigen::Vector3f& origin)
 {
     //坏菜了这个_x,_y好像是硬编码，当我们摄像机位置改变时就不对了
     //应该根据摄像机的位置和摄像机的direction来计算_x,_y,offset_x,offset_y
+    IntersectedTriangles.clear(); // 清空已处理的三角形列表
+    std::unordered_set<const objLoader::Triangle*> added;
 
      float _y = std::tan(fov_y / 2.0f) * z_near;
      float _x = _y * aspect_ratio;
@@ -29,7 +28,6 @@ void rasterizer::setGBuffers(const objLoader& model)
      float offset_x = _x/(SCREEN_WIDTH/2.0f);
      float offset_y = _y/(SCREEN_HEIGHT/2.0f);
     //这里得把SCREEN_WIDTH和SCREEN_HEIGHT改成window.getWidth()和window.getHeight()
-     Eigen::Vector3f origin (EYE_POS_X,EYE_POS_Y,EYE_POS_Z);
      for(int i = 0; i < SCREEN_HEIGHT; ++i) {
         for (int j = 0; j < SCREEN_WIDTH; ++j) {
             float x = -_x + j * offset_x;
@@ -46,8 +44,11 @@ void rasterizer::setGBuffers(const objLoader& model)
                 Eigen::Vector3f point2 = triangle.vertices[2].position;
                 r.findIntersectionPoint(point0,point1,point2);
                 if(r.getIntersect())
-                {
-                    IntersectedTriangles.push_back(triangle);
+                {   
+                    if(added.insert(&triangle).second)
+                    {
+                        IntersectedTriangles.push_back(triangle);
+                    }
                     //我需要填入zBuffer里面的值到底是打到的点的z值还是三角形的插值？
                     float alpha, beta, gamma;
                     //这里我们把重心坐标的计算封装为一个函数
@@ -100,7 +101,7 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,co
         int min_y_index = static_cast<int>(min_y/offset);
         int max_y_index = static_cast<int>(max_y/offset);
 
-        objLoader::Material material = model.materialFor(triangle);
+        const auto& material = model.materialFor(triangle);
         for(int i = min_y_index; i <= max_y_index; ++i) {
             for(int j = min_x_index; j <= max_x_index; ++j) {
                 Eigen::Vector3f P(j + offset/2.0f, i + offset/2.0f, 0.0f);
