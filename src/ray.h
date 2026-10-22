@@ -14,7 +14,7 @@ class ray{
         bool intersect;
         Eigen::Vector3f intersectionPoint;
     public:
-        ray() = default;
+        ray() ;
         ray(const Eigen::Vector3f& o, const Eigen::Vector3f& d) : origin(o), direction(d) {}
         Eigen::Vector3f getOrigin() const { return origin; }
         Eigen::Vector3f getDirection() const { return direction; }

@@ -21,9 +21,18 @@ aspect_ratio可能也要改变吧？我决定应该设置一个窗口类，
     direction = (target - position).normalized();
 }
 
-camera::camera(const Eigen::Vector3f& pos, const Eigen::Vector3f& tgt, const Eigen::Vector3f& up)
-    : position(pos), target(tgt), worldUp(up) {
-    fov_y = pi / 3.0f; // 60 degrees
-    aspect_ratio = 4.0f / 3.0f; // Assuming a 4:3 aspect ratio
-    direction = (target - position).normalized();
-}
+camera::camera():camera(Eigen::Vector3f(EYE_POS_X, EYE_POS_Y, EYE_POS_Z),
+                        Eigen::Vector3f(0.0f, 0.0f, (z_near+z_far)/2.0f),
+                        Eigen::Vector3f(0.0f, 1.0f, 0.0f))
+ {}
+
+ camera::camera(const Eigen::Vector3f& pos,
+               const Eigen::Vector3f& tgt,
+               const Eigen::Vector3f& up)
+    : position(pos),
+      fov_y(pi / 3.0f),
+      aspect_ratio(4.0f / 3.0f),
+      direction((tgt - pos).normalized()),
+      worldUp(up),
+      target(tgt)
+{}

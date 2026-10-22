@@ -35,3 +35,8 @@ void ray::findIntersectionPoint(Eigen::Vector3f& point0, Eigen::Vector3f& point1
         intersect = false; // 交点在三角形外
     }
 }
+
+ray::ray():ray(Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, -1.0f))
+{
+    intersect = false;
+}
