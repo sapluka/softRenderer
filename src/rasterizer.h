@@ -25,9 +25,10 @@ class rasterizer {
         rasterizer(const class shadeModel& s) : shadeModel(s) {}
         void initRasterizer();
         //下面这个是基于眼睛的G-buffer，但是我们的GBuffer是不是应该基于光源呢？
-        void setGBuffers(const objLoader& model,const Eigen::Vector3f& origin);
-        void rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target);//负责光栅化,着色以及更新frameBuffer
+        void setGBuffers(const objLoader& model,const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
+                         const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());
+        void rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
+                       const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());//负责光栅化,着色以及更新frameBuffer
         void draw();//负责把frameBuffer呈现在屏幕上
-        void shading();
 
 };

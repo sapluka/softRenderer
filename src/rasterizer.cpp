@@ -15,25 +15,22 @@ void rasterizer::initRasterizer() {
 
 
 
-void rasterizer::setGBuffers(const objLoader& model,const Eigen::Vector3f& origin)
+void rasterizer::setGBuffers(const objLoader& model,const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
+                            const Eigen::Vector3f& up)
 {
-    //坏菜了这个_x,_y好像是硬编码，当我们摄像机位置改变时就不对了
-    //应该根据摄像机的位置和摄像机的direction来计算_x,_y,offset_x,offset_y
     IntersectedTriangles.clear(); // 清空已处理的三角形列表
     std::unordered_set<const objLoader::Triangle*> added;
 
-     float _y = std::tan(fov_y / 2.0f) * z_near;
-     float _x = _y * aspect_ratio;
-     
-     float offset_x = _x/(SCREEN_WIDTH/2.0f);
-     float offset_y = _y/(SCREEN_HEIGHT/2.0f);
+    const Eigen::Matrix4f view = Transform::getViewMatrix(origin, target, up);
+    const Eigen::Matrix3f cameraToWorld = view.block<3, 3>(0, 0).transpose();
+    const Eigen::Matrix4f projection = Transform::getProjectionMatrix();
     //这里得把SCREEN_WIDTH和SCREEN_HEIGHT改成window.getWidth()和window.getHeight()
      for(int i = 0; i < SCREEN_HEIGHT; ++i) {
         for (int j = 0; j < SCREEN_WIDTH; ++j) {
-            float x = -_x + j * offset_x;
-            float y = _y - i * offset_y;
-            Eigen::Vector3f direction(x, y, -z_near);
-            direction.normalize();
+            const float ndcX = 2.0f * (j + 0.5f) / SCREEN_WIDTH - 1.0f;
+            const float ndcY = 1.0f - 2.0f * (i + 0.5f) / SCREEN_HEIGHT;
+            const Eigen::Vector3f cameraDirection(ndcX / projection(0, 0), ndcY / projection(1, 1), -1.0f);
+            const Eigen::Vector3f direction = (cameraToWorld * cameraDirection).normalized();
             ray r(origin, direction);
             // 在这里可以使用射线 r 进行进一步的处理，例如与场景中的物体进行交互
             for (const auto& triangle : model.triangles())
@@ -71,7 +68,8 @@ void rasterizer::setGBuffers(const objLoader& model,const Eigen::Vector3f& origi
     }
 }
 
-void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target) {
+void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
+                           const Eigen::Vector3f& up) {
 
     float _y = std::tan(fov_y / 2.0f) * z_near;
     float _x = _y * aspect_ratio;
@@ -84,7 +82,7 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,co
 
         for(const auto& vertex : triangle.vertices) {
         //对点进行MVP变换
-        Eigen::Vector3f screenPos = Transform::transform(vertex.position,eye,target);
+        Eigen::Vector3f screenPos = Transform::transform(vertex.position,eye,target,up);
         screenTriangle.push_back(screenPos);
 
         //计算着色
