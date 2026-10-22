@@ -1,6 +1,7 @@
 #include "transform.h"
 #include <Eigen/core>
 #include <cmath>
+#include <stdexcept>
 
 Eigen::Matrix4f Transform::getModelMatrix(std::vector<float>&scales,std::vector<float>&translates,Eigen::Vector3f axis,float theta)
 {
@@ -26,12 +27,27 @@ Eigen::Matrix4f Transform::getModelMatrix(std::vector<float>&scales,std::vector<
                
 }
 
-Eigen::Matrix4f Transform::getViewMatrix(const Eigen::Vector3f& eye, const Eigen::Vector3f& target)
+Eigen::Matrix4f Transform::getViewMatrix(const Eigen::Vector3f& eye, const Eigen::Vector3f& target,
+                                       const Eigen::Vector3f& up)
 {
-    // 这里可以使用相机的lookAt函数来计算视图矩阵,不会的去问问ai
-    Eigen::Vector3f up(0.0f, 1.0f, 0.0f); // 假设世界空间的上方向为Y轴正方向
-    Eigen::Vector3f b = (eye - target).normalized(); // 计算相机的后方向
-    Eigen::Vector3f r = up.cross(b).normalized(); // 计算相机的右方向
+    const Eigen::Vector3f offset = eye - target;
+    const float radius = offset.norm();
+    if (!eye.allFinite() || !target.allFinite() || !offset.allFinite()
+        || !std::isfinite(radius) || radius <= 1e-6f) {
+        throw std::invalid_argument("View matrix requires distinct, finite eye and target positions.");
+    }
+
+    Eigen::Vector3f b = offset / radius; // 计算相机的后方向
+    Eigen::Vector3f r = up.cross(b);
+    if (!r.allFinite() || r.squaredNorm() <= 1e-12f) {
+        // 兼容初始 up 与视线平行的情况；正常绕行时 up 和 b 一起旋转，不会在极点退化。
+        Eigen::Vector3f referenceUp = Eigen::Vector3f::UnitX();
+        if (std::abs(b.y()) < 0.9f) {
+            referenceUp = Eigen::Vector3f::UnitY();
+        }
+        r = referenceUp.cross(b);
+    }
+    r.normalize(); // 计算相机的右方向
     Eigen::Vector3f u = b.cross(r).normalized(); // 计算相机的上方向
 
     Eigen::Matrix4f view;
@@ -95,11 +111,12 @@ void Transform::computeBarycentric2D(const Eigen::Vector3f& p, const Eigen::Vect
 
 }
 
-Eigen::Vector3f transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye,const Eigen::Vector3f& target)
+Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
+                                     const Eigen::Vector3f& up)
 {
     Eigen::Vector4f worldPos(point.x(), point.y(), point.z(), 1.0f);
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
-    Eigen::Matrix4f view = Transform::getViewMatrix(eye, target);
+    Eigen::Matrix4f view = Transform::getViewMatrix(eye, target, up);
     Eigen::Matrix4f projection = Transform::getProjectionMatrix();
     Eigen::Vector4f clipSpacePos = projection * view * model * worldPos;
     Eigen::Vector4f ndcPos = Transform::getNDC(clipSpacePos);

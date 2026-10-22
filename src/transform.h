@@ -14,10 +14,12 @@ class Transform {
     public:
 
     //transform函数封装了MVP，NDC和Viewport矩阵转换
-    static Eigen::Vector3f transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye,const Eigen::Vector3f& target);//封装了各种矩阵，掌管整个流程
+    static Eigen::Vector3f transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
+                                     const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());//封装了各种矩阵，掌管整个流程
     
     static Eigen::Matrix4f getModelMatrix(std::vector<float>&scales,std::vector<float>&translates,Eigen::Vector3f axis,float theta);//先暂时不管输入参数
-    static Eigen::Matrix4f getViewMatrix(const Eigen::Vector3f& eye,const Eigen::Vector3f& target);
+    static Eigen::Matrix4f getViewMatrix(const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
+                                        const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());
     static Eigen::Matrix4f getProjectionMatrix();
     static Eigen::Vector4f getNDC(const Eigen::Vector4f& clipSpacePoint);
     static Eigen::Matrix4f getViewportMatrix();
