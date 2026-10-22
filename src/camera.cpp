@@ -4,7 +4,7 @@ void camera::initCamera() {
     position = Eigen::Vector3f(EYE_POS_X, EYE_POS_Y, EYE_POS_Z);
     fov_y = pi / 3.0f; // 60 degrees
     aspect_ratio = 4.0f / 3.0f; // Assuming a 4:3 aspect ratio
-    worldUp = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+    up = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     target = Eigen::Vector3f(0.0f, 0.0f, (z_near+z_far)/2.0f); 
     /*
 现在有一个显而易见的问题：物体的位置不应该由.obj决定吗？
@@ -33,6 +33,18 @@ camera::camera():camera(Eigen::Vector3f(EYE_POS_X, EYE_POS_Y, EYE_POS_Z),
       fov_y(pi / 3.0f),
       aspect_ratio(4.0f / 3.0f),
       direction((tgt - pos).normalized()),
-      worldUp(up),
+      up(up.normalized()),
       target(tgt)
 {}
+
+void camera::setPosition(const Eigen::Vector3f& pos)
+{
+    position = pos;
+    const Eigen::Vector3f forward = target - position;
+    direction = forward.normalized();
+}
+
+void camera::setUp(const Eigen::Vector3f& newUp)
+{
+    up = newUp.normalized();
+}
