@@ -22,6 +22,7 @@ class camera{
     Eigen::Vector3f getUp() const { return up; }
     void setPosition(const Eigen::Vector3f& pos);
     void setUp(const Eigen::Vector3f& newUp);
+    void setTarget(const Eigen::Vector3f& tar);
 
     
 };

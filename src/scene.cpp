@@ -1,8 +1,13 @@
 #include "scene.h"
+#include "parameter.h"
 #include "transform.h"
 #include <Eigen/core>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
+#include <string>
+#include <thread>
 
 scene::scene(objLoader& model, rasterizer& rasterizer, camera& camera):
     model_(model),
@@ -14,16 +19,10 @@ scene::scene(objLoader& model, rasterizer& rasterizer, camera& camera):
 
 void scene::init() {
     // 初始化模型
-    model_.loadObj("path/to/your/model.obj"); // 替换为实际的模型路径
-
-    // 初始化相机
-    camera_.initCamera();
-
-    // 初始化光栅化器
-    rasterizer_.initRasterizer();
-    rasterizer_.setGBuffers(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp());
-
-    // 初始化着色器模型
+    initGLFW();
+    createWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "test");
+    makeCurrentContext();
+    initGlad();
 
 }
 
@@ -68,14 +67,24 @@ void scene::initGlad() {
 
 void scene::releaseResources()
 {
-    glfwDestroyWindow(window);
+    if (window) {
+        glfwMakeContextCurrent(window);
+        rasterizer_.releaseDrawResources();
+        glfwDestroyWindow(window);
+        window = nullptr;
+    }
     glfwTerminate();
 }
 
 void scene::render() {
+    bool firstFrame = true;
+    const unsigned int workerCount = std::min(
+        std::max(1u, std::thread::hardware_concurrency()), static_cast<unsigned int>(SCREEN_HEIGHT));
+    std::cout << "Rendering " << SCREEN_WIDTH << 'x' << SCREEN_HEIGHT << ", "
+              << model_.triangles().size() << " triangles, " << workerCount << " workers" << std::endl;
 
     while (!glfwWindowShouldClose(window)) {
-
+        glfwPollEvents();
         if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         {
             glfwSetWindowShouldClose(window, true);
@@ -83,19 +92,46 @@ void scene::render() {
             // 清除屏幕
         glClearColor(0.1f, 0.1f, 0.6f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        checkRotate(window);
 
         // 渲染场景
         //这里我们set了一个buffer，这个buffer是相对于摄像机的。我们标记了所有intersected triangles，
         // 此时就可以开始rasterize。下面这两行函数基本上就是针对没有阴影的情况下，
         // 我们去进行一个渲染。如果我们想要加入阴影和全局光照，肯定是要再用两个函数。
         //一个是更新Shadow Map的函数，一个是计算GI的函数吗？
-        rasterizer_.setGBuffers(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp());
-        rasterizer_.rasterize(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp());
+        const auto frameStart = std::chrono::steady_clock::now();
+        int lastCompletedRows = -1;
+        const bool completed = rasterizer_.setGBuffers(
+            model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp(), workerCount,
+            [this, &lastCompletedRows](int completedRows, int totalRows) {
+                glfwPollEvents();
+                if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+                    glfwSetWindowShouldClose(window, true);
+                if (completedRows != lastCompletedRows) {
+                    const std::string title = "Rendering " + std::to_string(completedRows)
+                                            + "/" + std::to_string(totalRows) + " rows";
+                    glfwSetWindowTitle(window, title.c_str());
+                    lastCompletedRows = completedRows;
+                }
+                return !glfwWindowShouldClose(window);
+            });
+        if (!completed) break;
+        const auto traceEnd = std::chrono::steady_clock::now();
+        sync();
         rasterizer_.draw();
         glfwSwapBuffers(window);
-        glfwPollEvents();
-
-        checkRotate(window);
+        const auto frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - frameStart).count();
+        const std::string title = "Renderer - " + std::to_string(frameMilliseconds) + " ms";
+        glfwSetWindowTitle(window, title.c_str());
+        if (firstFrame) {
+            const auto traceMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                traceEnd - frameStart).count();
+            std::cout << "First frame rendered in " << frameMilliseconds
+                      << " ms (trace: " << traceMilliseconds << " ms, display: "
+                      << frameMilliseconds - traceMilliseconds << " ms)" << std::endl;
+            firstFrame = false;
+        }
     }
 }
 

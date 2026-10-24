@@ -3,7 +3,7 @@
 #include <Eigen/Core>
 #include <cmath>
 
-Eigen::Vector3f shadeModel::computeShading(const objLoader::Material& material, const Eigen::Vector3f& camera, const Eigen::Vector3f& point, const Eigen::Vector3f& normal) {
+Eigen::Vector3f shadeModel::computeShading(const objLoader::Material& material, const Eigen::Vector3f& camera, const Eigen::Vector3f& point, const Eigen::Vector3f& normal) const {
     // 计算光源方向
     Eigen::Vector3f lightDir = (sceneLight.getPosition() - point).normalized();
     

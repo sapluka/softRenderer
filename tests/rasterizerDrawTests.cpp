@@ -51,10 +51,18 @@ int main() {
         return 77;
     }
 
-    rasterizer renderer;
+    shadeModel shader;
+    rasterizer renderer(shader);
     int result = 0;
     try {
         using Eigen::Vector3f;
+        renderer.initRasterizer();
+        renderer.draw();
+        glReadBuffer(GL_BACK);
+        expectPixel(window, .1f, .1f, {0, 0, 128});
+        renderer.clear();
+        renderer.draw();
+        expectPixel(window, .9f, .9f, {0, 0, 128});
         RasterizerDrawTestAccess::setFrame(renderer, {
             {Vector3f(1, 0, 0), Vector3f(0, 1, 0)},
             {Vector3f(0, 0, 1), Vector3f(1, 1, 0)}

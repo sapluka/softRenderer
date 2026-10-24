@@ -40,7 +40,7 @@ class scene {
     void createWindow(int width, int height, const char* title);
     void initGlad();
     void makeCurrentContext();
-    void render();//主循环
+    void render();
     void rotateCamera(double x,double y, double u, double v);//使摄像机在固定的球面上旋转
     void releaseResources();//释放资源
     void sync();

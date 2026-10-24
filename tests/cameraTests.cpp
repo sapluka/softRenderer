@@ -39,13 +39,14 @@ void checkPose(const camera& camera, const Vector3f& target, float radius) {
 
 struct OrbitScene {
     objLoader model;
+    shadeModel shader;
     rasterizer rasterizer_;
     camera camera_;
     scene scene_;
 
     OrbitScene(const Vector3f& eye, const Vector3f& target,
                const Vector3f& up = Vector3f::UnitY())
-        : camera_(eye, target, up), scene_(model, rasterizer_, camera_) {}
+        : rasterizer_(shader), camera_(eye, target, up), scene_(model, rasterizer_, camera_) {}
 };
 } // namespace
 
@@ -177,9 +178,12 @@ int main() {
         const Vector3f rolled = Transform::transform(Vector3f::UnitX(), eye, target, Vector3f::UnitX());
         requireNear(unrolled, Transform::transform(Vector3f::UnitX(), eye, target, Vector3f::UnitY()),
                     "Default up changed existing transform calls.");
-        require(unrolled.x() < center.x() && std::abs(unrolled.y() - center.y()) < 1e-4f,
-                "Unexpected existing projection convention.");
-        require(std::abs(rolled.x() - center.x()) < 1e-4f && rolled.y() > center.y(),
+        require(unrolled.x() > center.x() && std::abs(unrolled.y() - center.y()) < 1e-4f,
+                "World right did not project to screen right.");
+        const Vector3f upper = Transform::transform(Vector3f::UnitY(), eye, target);
+        require(std::abs(upper.x() - center.x()) < 1e-4f && upper.y() < center.y(),
+                "World up did not project to screen up.");
+        require(std::abs(rolled.x() - center.x()) < 1e-4f && rolled.y() < center.y(),
                 "Screen transform did not apply camera roll.");
     });
 

@@ -1,4 +1,5 @@
 #include "camera.h"
+#include <Eigen/Core>
 
 void camera::initCamera() {
     position = Eigen::Vector3f(EYE_POS_X, EYE_POS_Y, EYE_POS_Z);
@@ -47,4 +48,9 @@ void camera::setPosition(const Eigen::Vector3f& pos)
 void camera::setUp(const Eigen::Vector3f& newUp)
 {
     up = newUp.normalized();
+}
+
+void camera::setTarget(const Eigen::Vector3f& tar)
+{
+    target = tar;
 }

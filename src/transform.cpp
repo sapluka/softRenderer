@@ -63,8 +63,8 @@ Eigen::Matrix4f Transform::getProjectionMatrix()
     float f = 1.0f / tan(fov_y / 2.0f);
 
     Eigen::Matrix4f projection;
-    projection<<-f/aspect_ratio,0.0f,0.0f,0.0f,
-                0.0f,-f,0.0f,0.0f,
+    projection<<f/aspect_ratio,0.0f,0.0f,0.0f,
+                0.0f,f,0.0f,0.0f,
                 0.0f,0.0f,-(z_near+z_far)/(z_far-z_near),2.0f*z_near*z_far/(z_far-z_near),
                 0.0f,0.0f,-1.0f,0.0f;
     return projection;

@@ -2,6 +2,15 @@ cmake_minimum_required(VERSION 3.20)
 
 project(renderer LANGUAGES C CXX)
 
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build configuration" FORCE)
+endif()
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(WARNING "Debug rendering is slow. Use -DCMAKE_BUILD_TYPE=RelWithDebInfo for performance measurements.")
+endif()
+
+find_package(Threads REQUIRED)
+
 # Declare the standard explicitly so compile_commands.json also tells editors.
 # GCC 15 already defaults to C++17, but clangd's Windows default is C++14.
 set(CMAKE_CXX_STANDARD 17)
@@ -71,7 +80,7 @@ target_compile_definitions(renderer PUBLIC GLFW_INCLUDE_NONE)
 target_compile_definitions(renderer PRIVATE
     "RENDERER_SHADER_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/shader\""
 )
-target_link_libraries(renderer PUBLIC obj_loader Eigen3::Eigen glad glfw)
+target_link_libraries(renderer PUBLIC obj_loader Eigen3::Eigen glad glfw Threads::Threads)
 
 # An empty main.cpp is a placeholder, not an application entry point.
 set(RENDERER_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
@@ -81,6 +90,10 @@ if(EXISTS "${RENDERER_MAIN}")
     if(RENDERER_MAIN_SIZE GREATER 0)
         add_executable(renderer_app "${RENDERER_MAIN}")
         target_link_libraries(renderer_app PRIVATE renderer)
+        target_compile_definitions(renderer_app PRIVATE
+            "RENDERER_ASSET_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/assets\""
+            "RENDERER_BUILD_CONFIG=\"$<CONFIG>\""
+        )
         set_target_properties(renderer_app PROPERTIES OUTPUT_NAME renderer)
     endif()
 endif()
@@ -100,6 +113,10 @@ if(BUILD_TESTING)
     target_link_libraries(rasterizer_draw_tests PRIVATE renderer)
     add_test(NAME rasterizer_draw_tests COMMAND rasterizer_draw_tests)
     set_tests_properties(rasterizer_draw_tests PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(rasterizer_trace_tests tests/rasterizerTraceTests.cpp)
+    target_link_libraries(rasterizer_trace_tests PRIVATE renderer)
+    add_test(NAME rasterizer_trace_tests COMMAND rasterizer_trace_tests)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
