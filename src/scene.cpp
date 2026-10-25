@@ -49,6 +49,7 @@ void scene::createWindow(int width, int height, const char* title)
         glfwTerminate();
         return;
     }
+    
 
 }
 
@@ -77,11 +78,6 @@ void scene::releaseResources()
 }
 
 void scene::render() {
-    bool firstFrame = true;
-    const unsigned int workerCount = std::min(
-        std::max(1u, std::thread::hardware_concurrency()), static_cast<unsigned int>(SCREEN_HEIGHT));
-    std::cout << "Rendering " << SCREEN_WIDTH << 'x' << SCREEN_HEIGHT << ", "
-              << model_.triangles().size() << " triangles, " << workerCount << " workers" << std::endl;
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -99,39 +95,13 @@ void scene::render() {
         // 此时就可以开始rasterize。下面这两行函数基本上就是针对没有阴影的情况下，
         // 我们去进行一个渲染。如果我们想要加入阴影和全局光照，肯定是要再用两个函数。
         //一个是更新Shadow Map的函数，一个是计算GI的函数吗？
-        const auto frameStart = std::chrono::steady_clock::now();
-        int lastCompletedRows = -1;
-        const bool completed = rasterizer_.setGBuffers(
-            model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp(), workerCount,
-            [this, &lastCompletedRows](int completedRows, int totalRows) {
-                glfwPollEvents();
-                if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-                    glfwSetWindowShouldClose(window, true);
-                if (completedRows != lastCompletedRows) {
-                    const std::string title = "Rendering " + std::to_string(completedRows)
-                                            + "/" + std::to_string(totalRows) + " rows";
-                    glfwSetWindowTitle(window, title.c_str());
-                    lastCompletedRows = completedRows;
-                }
-                return !glfwWindowShouldClose(window);
-            });
-        if (!completed) break;
-        const auto traceEnd = std::chrono::steady_clock::now();
+
+        rasterizer_.rasterize(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp());
         sync();
         rasterizer_.draw();
         glfwSwapBuffers(window);
-        const auto frameMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - frameStart).count();
-        const std::string title = "Renderer - " + std::to_string(frameMilliseconds) + " ms";
-        glfwSetWindowTitle(window, title.c_str());
-        if (firstFrame) {
-            const auto traceMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
-                traceEnd - frameStart).count();
-            std::cout << "First frame rendered in " << frameMilliseconds
-                      << " ms (trace: " << traceMilliseconds << " ms, display: "
-                      << frameMilliseconds - traceMilliseconds << " ms)" << std::endl;
-            firstFrame = false;
-        }
+        //下面这几行在打印渲染时间和更改标题
+        rasterizer_.clear();
     }
 }
 
