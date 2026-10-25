@@ -10,7 +10,7 @@ int main()
 {
     std::cout << "Build configuration: " << RENDERER_BUILD_CONFIG << std::endl;
     objLoader mod;
-    if (!mod.loadObj(std::filesystem::path(RENDERER_ASSET_DIR) / "monkey/monkey.obj")) {
+    if (!mod.loadObj(std::filesystem::path(RENDERER_ASSET_DIR) / "bunny/bunny.obj")) {
         std::cerr << mod.error() << std::endl;
         return 1;
     }

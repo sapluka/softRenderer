@@ -34,7 +34,7 @@ struct RasterizerTraceTestAccess {
         renderer.frameBuffer.assign(height,
             std::vector<Eigen::Vector3f>(width, Eigen::Vector3f::Zero()));
         renderer.zBuffer.assign(height,
-            std::vector<float>(width, -std::numeric_limits<float>::infinity()));
+            std::vector<float>(width, std::numeric_limits<float>::infinity()));
         renderer.normalBuffer.assign(height,
             std::vector<Eigen::Vector3f>(width, Eigen::Vector3f::Zero()));
         renderer.IntersectedTriangles.clear();
@@ -64,7 +64,7 @@ const Vector3f backgroundColor(0.0f, 0.0f, 0.5f);
 constexpr int testWidth = 13;
 constexpr int testHeight = 9;
 constexpr float tolerance = 2e-5f;
-constexpr float emptyDepth = -std::numeric_limits<float>::infinity();
+constexpr float emptyDepth = std::numeric_limits<float>::infinity();
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -152,7 +152,7 @@ void requireEmpty(const Snapshot& buffers, int width, int height) {
     for (int row = 0; row < height; ++row) {
         for (int column = 0; column < width; ++column) {
             requireNear(buffers.colors[row][column], backgroundColor, "Color was not cleared to the blue background.");
-            requireDepth(buffers.depths[row][column], emptyDepth, "Depth was not cleared to -infinity.");
+            requireDepth(buffers.depths[row][column], emptyDepth, "Depth was not cleared to +infinity.");
             requireNear(buffers.normals[row][column], Vector3f::Zero(), "Normal was not cleared.");
         }
     }
@@ -283,6 +283,11 @@ int runTests() {
     const fs::path upperRightPath = files.write("upper_right.obj",
         "mtllib trace.mtl\nv .2 .2 0\nv 2.5 .2 0\nv .2 2.5 0\n"
         "vn 0 0 1\nusemtl red\nf 1//1 2//1 3//1\n");
+    const fs::path tiltedPath = files.write("tilted.obj",
+        "mtllib trace.mtl\nv -1.5 -1 1\nv 1.5 -1 -1\nv 0 1.5 0\n"
+        "vn 0 0 1\nvn 0 .6 .8\nvn .6 0 .8\nusemtl shaded\nf 1//1 2//2 3//3\n");
+    const fs::path edgeOnPath = files.write("edge_on.obj",
+        "v 0 -1 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\n");
     const objLoader layered = loadModel(layerPaths[0]);
     const objLoader reversed = loadModel(layerPaths[1]);
     const objLoader partial = loadModel(partialPath);
@@ -300,6 +305,122 @@ int runTests() {
             std::cerr << "FAIL " << name << ": " << error.what() << '\n';
         }
     };
+
+    run("screen barycentrics ignore Z while world barycentrics remain three-dimensional", [&] {
+        float alpha, beta, gamma;
+        require(Transform::computeBarycentric2D(Vector3f(1, 1, 99),
+            Vector3f(0, 0, .2f), Vector3f(2, 0, .8f), Vector3f(0, 2, -.5f), alpha, beta, gamma),
+            "Valid screen triangle was rejected.");
+        requireNear(Vector3f(alpha, beta, gamma), Vector3f(0, .5f, .5f),
+                    "Screen barycentrics included depth in their calculation.");
+        require(!Transform::computeBarycentric2D(Vector3f(1, 1, 0),
+            Vector3f(0, 0, 0), Vector3f(1, 1, 2), Vector3f(2, 2, 5), alpha, beta, gamma),
+            "Screen-space degenerate triangle was accepted.");
+        Transform::computeBarycentric3D(Vector3f(0, 1, 1),
+            Vector3f(0, 0, 0), Vector3f(0, 2, 0), Vector3f(0, 0, 2), alpha, beta, gamma);
+        requireNear(Vector3f(alpha, beta, gamma), Vector3f(0, .5f, .5f),
+                    "Legacy world-space barycentrics lost their Z component.");
+    });
+
+    run("transform returns clip W before perspective division for translated and rotated cameras", [&] {
+        for (const Pose& pose : {front, back,
+             Pose{Vector3f(5, 0, 0), Vector3f::Zero(), Vector3f::UnitY()}}) {
+            float clipW;
+            const Vector3f screen = Transform::transform(Vector3f::Zero(), pose.eye, pose.target, pose.up, clipW);
+            require(std::abs(clipW - 5.0f) < 1e-5f, "Clip W was confused with world Z or divided away.");
+            requireNear(screen, Transform::transform(Vector3f::Zero(), pose.eye, pose.target, pose.up),
+                        "Returning clip W changed the original screen-position result.");
+        }
+    });
+
+    run("rasterization fills the frame and keeps the near surface from either camera side", [&] {
+        for (const Pose& pose : {front, back}) {
+            RasterizerFixture fixture(SCREEN_WIDTH, SCREEN_HEIGHT);
+            Snapshot expected;
+            for (const objLoader* model : {&layered, &reversed}) {
+                fixture.renderer.clear();
+                fixture.renderer.rasterize(*model, pose.eye, pose.target, pose.up);
+                const Snapshot buffers = RasterizerTraceTestAccess::capture(fixture.renderer);
+                const bool reverseView = pose.eye.z() < 0;
+                const Vector3f nearest(0, 0, reverseView ? -1.0f : 1.0f);
+                requireDepth(buffers.depths[SCREEN_HEIGHT / 2][SCREEN_WIDTH / 2],
+                    Transform::transform(nearest, pose.eye, pose.target, pose.up).z(),
+                    "Rasterization retained the farther projected depth.");
+                requireNear(buffers.colors[SCREEN_HEIGHT / 2][SCREEN_WIDTH / 2], reverseView ? blue : red,
+                            "The farther material covered the near surface.");
+                std::size_t covered = 0;
+                for (const auto& row : buffers.depths)
+                    covered += std::count_if(row.begin(), row.end(), [](float depth) { return std::isfinite(depth); });
+                require(covered == static_cast<std::size_t>(SCREEN_WIDTH) * SCREEN_HEIGHT,
+                        "Rasterization stopped before processing all covered pixels.");
+                if (expected.colors.empty()) expected = buffers;
+                else requireBuffers(buffers, expected);
+            }
+        }
+    });
+
+    run("rasterized perspective-correct attributes agree with world-space ray intersections", [&] {
+        const objLoader tilted = loadModel(tiltedPath);
+        const auto& triangle = tilted.triangles().front();
+        const light sceneLight(Vector3f(3, 4, 6), Vector3f(.8f, .6f, .4f), 1.0f);
+        const std::array<Pose, 3> poses = {
+            front, Pose{Vector3f(4, 2, 5), Vector3f::Zero(), Vector3f::UnitY()},
+            Pose{front.eye, front.target, Vector3f::UnitX()}
+        };
+        const std::array<std::pair<int, int>, 3> pixels = {
+            std::pair<int, int>{SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2},
+            {SCREEN_WIDTH / 2 + 20, SCREEN_HEIGHT / 2 - 15},
+            {SCREEN_WIDTH / 2 - 20, SCREEN_HEIGHT / 2 + 10}
+        };
+        for (const Pose& pose : poses) {
+            RasterizerFixture fixture(SCREEN_WIDTH, SCREEN_HEIGHT, sceneLight);
+            fixture.renderer.clear();
+            fixture.renderer.rasterize(tilted, pose.eye, pose.target, pose.up);
+            const Snapshot buffers = RasterizerTraceTestAccess::capture(fixture.renderer);
+            const Eigen::Matrix4f view = Transform::getViewMatrix(pose.eye, pose.target, pose.up);
+            const Eigen::Matrix3f cameraToWorld = view.block<3, 3>(0, 0).transpose();
+            const Eigen::Matrix4f projection = Transform::getProjectionMatrix();
+            for (const auto& pixel : pixels) {
+                const float ndcX = 2.0f * (pixel.first + .5f) / SCREEN_WIDTH - 1.0f;
+                const float ndcY = 1.0f - 2.0f * (pixel.second + .5f) / SCREEN_HEIGHT;
+                const Vector3f cameraDirection(ndcX / projection(0, 0), ndcY / projection(1, 1), -1.0f);
+                const Vector3f direction = (cameraToWorld * cameraDirection).normalized();
+                ray sample(pose.eye, direction);
+                Vector3f first = triangle.vertices[0].position;
+                Vector3f second = triangle.vertices[1].position;
+                Vector3f third = triangle.vertices[2].position;
+                sample.findIntersectionPoint(first, second, third);
+                require(sample.getIntersect(), "Reference ray missed the tilted fixture.");
+                const Vector3f point = sample.getIntersectionPoint();
+                float alpha, beta, gamma;
+                Transform::computeBarycentric3D(point, first, second, third, alpha, beta, gamma);
+                const Vector3f normal = (alpha * triangle.vertices[0].normal
+                    + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal).normalized();
+                const Vector3f color = fixture.shader.computeShading(tilted.materialFor(triangle), pose.eye, point, normal);
+                requireNear(buffers.normals[pixel.second][pixel.first], normal,
+                            "Rasterized normal did not use perspective-correct weights.");
+                requireNear(buffers.colors[pixel.second][pixel.first], color,
+                            "Rasterized lighting used an incorrect world position or normal.");
+                requireDepth(buffers.depths[pixel.second][pixel.first],
+                    Transform::transform(point, pose.eye, pose.target, pose.up).z(),
+                    "Projected depth received an extra perspective correction.");
+            }
+        }
+    });
+
+    run("cleared raster frames discard old pixels and screen-degenerate triangles", [&] {
+        RasterizerFixture fixture(SCREEN_WIDTH, SCREEN_HEIGHT);
+        fixture.renderer.clear();
+        fixture.renderer.rasterize(partial, front.eye, front.target, front.up);
+        require(std::isfinite(RasterizerTraceTestAccess::capture(fixture.renderer)
+                .depths[SCREEN_HEIGHT / 2][SCREEN_WIDTH / 2]), "World Z zero prevented a valid triangle from drawing.");
+        fixture.renderer.clear();
+        fixture.renderer.rasterize(partial, front.eye, Vector3f(0, 0, 10), front.up);
+        requireEmpty(RasterizerTraceTestAccess::capture(fixture.renderer), SCREEN_WIDTH, SCREEN_HEIGHT);
+        fixture.renderer.clear();
+        fixture.renderer.rasterize(loadModel(edgeOnPath), front.eye, front.target, front.up);
+        requireEmpty(RasterizerTraceTestAccess::capture(fixture.renderer), SCREEN_WIDTH, SCREEN_HEIGHT);
+    });
 
     run("worker counts, camera poses and triangle orders preserve all buffers", [&] {
         const std::array<Pose, 4> poses = {

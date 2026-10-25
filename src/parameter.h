@@ -13,5 +13,5 @@ constexpr float aspect_ratio = 4.0f/3.0f;
 constexpr int SCREEN_WIDTH = 800;
 constexpr int SCREEN_HEIGHT = 600;  
 constexpr float LIGHT_POS_X = 0.0f;
-constexpr float LIGHT_POS_Y = 10.0f;
+constexpr float LIGHT_POS_Y = 5.0f;
 constexpr float LIGHT_POS_Z = 0.0f;
