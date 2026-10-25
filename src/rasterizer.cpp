@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -20,7 +21,7 @@
 
 void rasterizer::initRasterizer() {
     frameBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,backgroundColor));
-    zBuffer.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,-std::numeric_limits<float>::infinity()));
+    zBuffer.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,std::numeric_limits<float>::infinity()));
     normalBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,Eigen::Vector3f::Zero()));
 }
 
@@ -97,7 +98,7 @@ bool rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& orig
                     if (!nearestTriangle) continue;
                     const auto& triangle = *nearestTriangle;
                     float alpha, beta, gamma;
-                    Transform::computeBarycentric2D(
+                    Transform::computeBarycentric3D(
                         nearestPoint, triangle.vertices[0].position,
                         triangle.vertices[1].position, triangle.vertices[2].position,
                         alpha, beta, gamma);
@@ -162,50 +163,87 @@ bool rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& orig
 void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
                            const Eigen::Vector3f& up) {
 
-    float _y = std::tan(fov_y / 2.0f) * z_near;
-    float _x = _y * aspect_ratio;
-     //如果我们能把offset,_x,_y都固定就好了，但是有点难，反正是用不了constexpr，要是全局变量或者私有数据还行
-    float offset = _x/(SCREEN_WIDTH/2.0f);
-    
-    for(const auto& triangle : IntersectedTriangles) {
+    if (frameBuffer.empty()) initRasterizer();
+    const int height = static_cast<int>(frameBuffer.size());
+    const int width = static_cast<int>(frameBuffer.front().size());
+    if (width == 0) return;
+
+    for(const auto& triangle: model.triangles())
+    {
 
         std::vector<Eigen::Vector3f>screenTriangle;
-
-        for(const auto& vertex : triangle.vertices) {
-        //对点进行MVP变换
-        Eigen::Vector3f screenPos = Transform::transform(vertex.position,eye,target,up);
-        screenTriangle.push_back(screenPos);
-
-        //计算着色
+        std::vector<float> inverseW;
+        for(const auto& vertex: triangle.vertices)
+        {
+            float clipW;
+            Eigen::Vector3f screenPos = Transform::transform(vertex.position, eye, target, up, clipW);
+            if (!std::isfinite(clipW) || clipW <= 0.0f || !screenPos.allFinite()) break;
+            screenTriangle.push_back(screenPos);
+            inverseW.push_back(1.0f / clipW);
         }
-        // 计算屏幕三角形的包围盒(实际坐标)
-        float min_x = std::min(screenTriangle[0].x(), std::min(screenTriangle[1].x(), screenTriangle[2].x()));
-        float max_x = std::max(screenTriangle[0].x(), std::max(screenTriangle[1].x(), screenTriangle[2].x()));
-        float min_y = std::min(screenTriangle[0].y(), std::min(screenTriangle[1].y(), screenTriangle[2].y()));
-        float max_y = std::max(screenTriangle[0].y(), std::max(screenTriangle[1].y(), screenTriangle[2].y()));
+        if (screenTriangle.size() != 3) continue;
 
-        // 计算屏幕三角形的包围盒(像素索引)
-        int min_x_index = static_cast<int>(min_x);
-        int max_x_index = static_cast<int>(max_x);
-        int min_y_index = static_cast<int>(min_y);
-        int max_y_index = static_cast<int>(max_y);
+        const float w_1 = inverseW[0];
+        const float w_2 = inverseW[1];
+        const float w_3 = inverseW[2];
 
-        const auto& material = model.materialFor(triangle);
-        for(int i = min_y_index; i <= max_y_index; ++i) {
-            for(int j = min_x_index; j <= max_x_index; ++j) {
-                Eigen::Vector3f P(j + 0.5f, i + 0.5f, 0.0f);
+        float min_x = std::max(0.0f, std::min({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
+        float max_x = std::min(static_cast<float>(width), std::max({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
+        float min_y = std::max(0.0f, std::min({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
+        float max_y = std::min(static_cast<float>(height), std::max({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
+        if (min_x > max_x || min_y > max_y) continue;
+
+        for(int x = static_cast<int>(std::floor(min_x)); x <= std::min(width - 1, static_cast<int>(std::ceil(max_x))); ++x)
+        {
+            for(int y = static_cast<int>(std::floor(min_y)); y <= std::min(height - 1, static_cast<int>(std::ceil(max_y))); ++y)
+            {
                 float alpha, beta, gamma;
-                Transform::computeBarycentric2D(P, screenTriangle[0], screenTriangle[1], screenTriangle[2], alpha, beta, gamma);
-                if(alpha >= 0 && beta >= 0 && gamma >= 0) {
-                    Eigen::Vector3f shadePoint = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
-                    //前后两个函数用的重心坐标不一样，这样子判断根本就没有几何意义,或许就不需要判断
-                    //if(shadePoint.z() > zBuffer[i][j]) {
-                      //  zBuffer[i][j] = shadePoint.z();
-                        frameBuffer[i][j] = shadeModel.computeShading(material, eye, shadePoint, normalBuffer[i][j]);
-                    //}
+                if (!Transform::computeBarycentric2D(Eigen::Vector3f(x+0.5f,y+0.5f,0.0f),screenTriangle[0],screenTriangle[1],screenTriangle[2],alpha, beta, gamma)) continue;
+                if(alpha < 0 || beta < 0 || gamma < 0) continue;
+                float z_interpolated = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
+                if (!std::isfinite(z_interpolated) || z_interpolated < -1.0f || z_interpolated > 1.0f) continue;
+                if(z_interpolated < zBuffer[y][x])
+                {
+                    float denom = alpha * w_1 + beta * w_2 + gamma * w_3;
+                    if (!std::isfinite(denom) || denom <= 0.0f) continue;
+                    //经过下面的变换之后alpha,beta,gamma就还原成了世界空间的插值权重了
+
+                    alpha = alpha *w_1/denom;
+                    beta = beta * w_2/denom;
+                    gamma = gamma * w_3/denom;
+
+                    Eigen::Vector3f normal = alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal;
+                    Eigen::Vector3f worldPosition = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
+                    if (!normal.allFinite() || normal.squaredNorm() <= 1e-12f || !worldPosition.allFinite()) continue;
+                    normal.normalize();
+                    Eigen::Vector3f color = shadeModel.computeShading(model.materialFor(triangle), eye, worldPosition, normal);
+                    if (!color.allFinite()) continue;
+                    zBuffer[y][x] = z_interpolated;
+                    normalBuffer[y][x] = normal;
+                    frameBuffer[y][x] = color;
                 }
+
+                /*
+                if(x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) continue;
+                float alpha, beta, gamma;
+                Transform::computeBarycentric2D(Eigen::Vector3f(x+0.5f,y+0.5f,0.0f),screenTriangle[0],screenTriangle[1],screenTriangle[2],alpha, beta, gamma);
+                if(alpha < 0 || beta < 0 || gamma < 0) continue;
+                float denom = alpha * w_1 + beta * w_2 + gamma * w_3;
+                if (denom == 0.0f) continue;
+                alpha = alpha *w_1/denom;
+                beta = beta * w_2/denom;
+                gamma = gamma * w_3/denom;
+                Eigen::Vector3f world_interpolated_position = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
+                if((world_interpolated_position-eye).norm() < zBuffer[y][x])
+                {
+                    zBuffer[y][x] = (world_interpolated_position-eye).norm();
+                    normalBuffer[y][x] = (alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal).normalized();
+                    frameBuffer[y][x] = shadeModel.computeShading(model.materialFor(triangle), eye, world_interpolated_position, normalBuffer[y][x]);
+                }
+                */
             }
         }
+
     }
 }
 
@@ -278,7 +316,7 @@ void rasterizer::clear()
     for (auto& row : frameBuffer)
         std::fill(row.begin(), row.end(), backgroundColor);
     for (auto& row : zBuffer)
-        std::fill(row.begin(), row.end(), -std::numeric_limits<float>::infinity());
+        std::fill(row.begin(), row.end(), std::numeric_limits<float>::infinity());
     for (auto& row : normalBuffer)
         std::fill(row.begin(), row.end(), Eigen::Vector3f::Zero());
     IntersectedTriangles.clear();

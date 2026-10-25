@@ -23,7 +23,7 @@ class rasterizer {
         std::vector<std::vector<Eigen::Vector3f>> normalBuffer; // 法线缓冲区
         std::vector<objLoader::Triangle> IntersectedTriangles;
         shadeModel& shadeModel;
-        const Eigen::Vector3f backgroundColor{0.0f, 0.0f, 0.5f};
+        const Eigen::Vector3f backgroundColor{0.5f, 0.8f, 0.9f};
         // 仅用于把 CPU 颜色缓冲显示到窗口，第一次 draw 时创建。
         unsigned int displayTexture = 0;
         unsigned int displayProgram = 0;
