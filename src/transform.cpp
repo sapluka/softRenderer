@@ -92,7 +92,27 @@ Eigen::Matrix4f Transform::getViewportMatrix()
     return viewport;
 }
 
-void Transform::computeBarycentric2D(const Eigen::Vector3f& p, const Eigen::Vector3f& a, const Eigen::Vector3f& b, const Eigen::Vector3f& c, float& alpha, float& beta, float& gamma) {
+bool Transform::computeBarycentric2D(const Eigen::Vector3f& point, const Eigen::Vector3f& first,
+                                   const Eigen::Vector3f& second, const Eigen::Vector3f& third,
+                                   float& alpha, float& beta, float& gamma) {
+    const Eigen::Vector2d firstEdge = second.head<2>().cast<double>() - first.head<2>().cast<double>();
+    const Eigen::Vector2d secondEdge = third.head<2>().cast<double>() - first.head<2>().cast<double>();
+    const Eigen::Vector2d offset = point.head<2>().cast<double>() - first.head<2>().cast<double>();
+    const double firstLengthSquared = firstEdge.dot(firstEdge);
+    const double edgeDot = firstEdge.dot(secondEdge);
+    const double secondLengthSquared = secondEdge.dot(secondEdge);
+    const double firstProjection = firstEdge.dot(offset);
+    const double secondProjection = secondEdge.dot(offset);
+    const double denominator = firstLengthSquared * secondLengthSquared - edgeDot * edgeDot;
+    if (!std::isfinite(denominator) || denominator <= 1e-12) return false;
+
+    beta = static_cast<float>((secondLengthSquared * firstProjection - edgeDot * secondProjection) / denominator);
+    gamma = static_cast<float>((firstLengthSquared * secondProjection - edgeDot * firstProjection) / denominator);
+    alpha = 1.0f - beta - gamma;
+    return std::isfinite(alpha) && std::isfinite(beta) && std::isfinite(gamma);
+}
+
+void Transform::computeBarycentric3D(const Eigen::Vector3f& p, const Eigen::Vector3f& a, const Eigen::Vector3f& b, const Eigen::Vector3f& c, float& alpha, float& beta, float& gamma) {
                     Eigen::Vector3f e_1 = b - a;
                     Eigen::Vector3f e_2 = c - a;
                     Eigen::Vector3f q = p - a;
@@ -114,11 +134,19 @@ void Transform::computeBarycentric2D(const Eigen::Vector3f& p, const Eigen::Vect
 Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
                                      const Eigen::Vector3f& up)
 {
+    float clipW;
+    return transform(point, eye, target, up, clipW);
+}
+
+Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye, const Eigen::Vector3f& target,
+                                     const Eigen::Vector3f& up, float& clipW)
+{
     Eigen::Vector4f worldPos(point.x(), point.y(), point.z(), 1.0f);
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f view = Transform::getViewMatrix(eye, target, up);
     Eigen::Matrix4f projection = Transform::getProjectionMatrix();
     Eigen::Vector4f clipSpacePos = projection * view * model * worldPos;
+    clipW = clipSpacePos.w();
     Eigen::Vector4f ndcPos = Transform::getNDC(clipSpacePos);
     Eigen::Matrix4f viewport = Transform::getViewportMatrix();
     Eigen::Vector4f screenPos = viewport * ndcPos;
