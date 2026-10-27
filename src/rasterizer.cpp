@@ -1,28 +1,11 @@
 #include "rasterizer.h"
-#include "objLoader.h"
-#include "parameter.h"
-#include <glad/gl.h>
-#include <GLFW/glfw3.h>
-#include <Eigen/Core>
-#include <Eigen/core>
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <cmath>
-#include <exception>
-#include <fstream>
-#include <iterator>
-#include <mutex>
-#include <stdexcept>
-#include <string>
-#include <thread>
-#include <unordered_set>
-#include <vector>
 
 void rasterizer::initRasterizer() {
     frameBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,backgroundColor));
     zBuffer.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,std::numeric_limits<float>::infinity()));
-    normalBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,Eigen::Vector3f::Zero()));
+    subZBuffer.assign(SCREEN_HEIGHT,std::vector<std::array<float, 4>>(SCREEN_WIDTH));
+    subFrameBuffer.assign(SCREEN_HEIGHT,std::vector<std::array<Eigen::Vector3f, 4>>(SCREEN_WIDTH));
+    clearSubBuffers();
 }
 
 
@@ -31,133 +14,8 @@ bool rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& orig
                             const Eigen::Vector3f& target, const Eigen::Vector3f& up,
                             unsigned int threadCount,
                             const std::function<bool(int, int)>& progress) {
-    if (frameBuffer.empty()) initRasterizer();
-    clear();
-    const int height = static_cast<int>(frameBuffer.size());
-    const int width = static_cast<int>(frameBuffer.front().size());
-    if (width == 0) return true;
 
-    const Eigen::Vector3f cameraOrigin = origin;
-    const Eigen::Matrix4f view = Transform::getViewMatrix(cameraOrigin, target, up);
-    const Eigen::Matrix3f cameraToWorld = view.block<3, 3>(0, 0).transpose();
-    const Eigen::Matrix4f projection = Transform::getProjectionMatrix();
-    const auto& triangles = model.triangles();
-    if (threadCount == 0) threadCount = std::max(1u, std::thread::hardware_concurrency());
-    const unsigned int workerCount = std::min(threadCount, static_cast<unsigned int>(height));
-    const std::size_t noHit = std::numeric_limits<std::size_t>::max();
-    std::vector<std::vector<std::size_t>> firstHits(
-        workerCount, std::vector<std::size_t>(triangles.size(), noHit));
-    std::atomic<int> nextRow{0};
-    std::atomic<int> completedRows{0};
-    std::atomic<unsigned int> remainingWorkers{workerCount};
-    std::atomic<bool> cancelled{false};
-    std::exception_ptr workerError;
-    std::mutex errorMutex;
-    std::vector<std::thread> workers;
-    workers.reserve(workerCount);
 
-    if (progress && !progress(0, height)) return false;
-
-    const auto renderRows = [&](unsigned int workerIndex) {
-        try {
-            while (!cancelled.load(std::memory_order_relaxed)) {
-                const int row = nextRow.fetch_add(1, std::memory_order_relaxed);
-                if (row >= height) break;
-                for (int column = 0; column < width; ++column) {
-                    if (cancelled.load(std::memory_order_relaxed)) break;
-                    const float ndcX = 2.0f * (column + 0.5f) / width - 1.0f;
-                    const float ndcY = 1.0f - 2.0f * (row + 0.5f) / height;
-                    const Eigen::Vector3f cameraDirection(
-                        ndcX / projection(0, 0), ndcY / projection(1, 1), -1.0f);
-                    const Eigen::Vector3f direction = (cameraToWorld * cameraDirection).normalized();
-                    ray pixelRay(cameraOrigin, direction);
-                    const objLoader::Triangle* nearestTriangle = nullptr;
-                    Eigen::Vector3f nearestPoint = Eigen::Vector3f::Zero();
-                    float nearestDistanceSquared = std::numeric_limits<float>::infinity();
-
-                    for (std::size_t triangleIndex = 0; triangleIndex < triangles.size(); ++triangleIndex) {
-                        const auto& triangle = triangles[triangleIndex];
-                        Eigen::Vector3f first = triangle.vertices[0].position;
-                        Eigen::Vector3f second = triangle.vertices[1].position;
-                        Eigen::Vector3f third = triangle.vertices[2].position;
-                        pixelRay.findIntersectionPoint(first, second, third);
-                        if (!pixelRay.getIntersect()) continue;
-
-                        const std::size_t pixelIndex = static_cast<std::size_t>(row) * width + column;
-                        firstHits[workerIndex][triangleIndex] = std::min(
-                            firstHits[workerIndex][triangleIndex], pixelIndex);
-                        const Eigen::Vector3f point = pixelRay.getIntersectionPoint();
-                        const float distanceSquared = (point - cameraOrigin).squaredNorm();
-                        if (distanceSquared < nearestDistanceSquared) {
-                            nearestDistanceSquared = distanceSquared;
-                            nearestTriangle = &triangle;
-                            nearestPoint = point;
-                        }
-                    }
-
-                    if (!nearestTriangle) continue;
-                    const auto& triangle = *nearestTriangle;
-                    float alpha, beta, gamma;
-                    Transform::computeBarycentric3D(
-                        nearestPoint, triangle.vertices[0].position,
-                        triangle.vertices[1].position, triangle.vertices[2].position,
-                        alpha, beta, gamma);
-                    Eigen::Vector3f normal = alpha * triangle.vertices[0].normal
-                                          + beta * triangle.vertices[1].normal
-                                          + gamma * triangle.vertices[2].normal;
-                    if (!normal.allFinite() || normal.squaredNorm() <= 1e-12f) {
-                        normal = (triangle.vertices[1].position - triangle.vertices[0].position)
-                            .cross(triangle.vertices[2].position - triangle.vertices[0].position);
-                    }
-                    zBuffer[row][column] = nearestPoint.z();
-                    normalBuffer[row][column] = normal.normalized();
-                    frameBuffer[row][column] = shadeModel.computeShading(
-                        model.materialFor(triangle), cameraOrigin,
-                        nearestPoint, normalBuffer[row][column]);
-                }
-                if (!cancelled.load(std::memory_order_relaxed))
-                    completedRows.fetch_add(1, std::memory_order_relaxed);
-            }
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(errorMutex);
-            if (!workerError) workerError = std::current_exception();
-            cancelled.store(true, std::memory_order_relaxed);
-        }
-        remainingWorkers.fetch_sub(1, std::memory_order_release);
-    };
-
-    const auto joinWorkers = [&] {
-        for (auto& worker : workers) {
-            if (worker.joinable()) worker.join();
-        }
-    };
-    try {
-        for (unsigned int workerIndex = 0; workerIndex < workerCount; ++workerIndex)
-            workers.emplace_back(renderRows, workerIndex);
-        while (remainingWorkers.load(std::memory_order_acquire) != 0) {
-            if (progress && !progress(completedRows.load(std::memory_order_relaxed), height))
-                cancelled.store(true, std::memory_order_relaxed);
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    } catch (...) {
-        cancelled.store(true, std::memory_order_relaxed);
-        joinWorkers();
-        throw;
-    }
-    joinWorkers();
-    if (workerError) std::rethrow_exception(workerError);
-    if (cancelled.load(std::memory_order_relaxed)) return false;
-
-    std::vector<std::pair<std::size_t, std::size_t>> hitOrder;
-    for (std::size_t triangleIndex = 0; triangleIndex < triangles.size(); ++triangleIndex) {
-        std::size_t firstPixel = noHit;
-        for (const auto& workerHits : firstHits)
-            firstPixel = std::min(firstPixel, workerHits[triangleIndex]);
-        if (firstPixel != noHit) hitOrder.emplace_back(firstPixel, triangleIndex);
-    }
-    std::sort(hitOrder.begin(), hitOrder.end());
-    for (const auto& hit : hitOrder) IntersectedTriangles.push_back(triangles[hit.second]);
-    return !progress || progress(height, height);
 }
 
 void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
@@ -183,67 +41,91 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,co
         }
         if (screenTriangle.size() != 3) continue;
 
-        const float w_1 = inverseW[0];
-        const float w_2 = inverseW[1];
-        const float w_3 = inverseW[2];
-
         float min_x = std::max(0.0f, std::min({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
         float max_x = std::min(static_cast<float>(width), std::max({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
         float min_y = std::max(0.0f, std::min({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
         float max_y = std::min(static_cast<float>(height), std::max({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
         if (min_x > max_x || min_y > max_y) continue;
 
+        const auto& material = model.materialFor(triangle);
         for(int x = static_cast<int>(std::floor(min_x)); x <= std::min(width - 1, static_cast<int>(std::ceil(max_x))); ++x)
         {
             for(int y = static_cast<int>(std::floor(min_y)); y <= std::min(height - 1, static_cast<int>(std::ceil(max_y))); ++y)
             {
-                float alpha, beta, gamma;
-                if (!Transform::computeBarycentric2D(Eigen::Vector3f(x+0.5f,y+0.5f,0.0f),screenTriangle[0],screenTriangle[1],screenTriangle[2],alpha, beta, gamma)) continue;
-                if(alpha < 0 || beta < 0 || gamma < 0) continue;
-                float z_interpolated = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
-                if (!std::isfinite(z_interpolated) || z_interpolated < -1.0f || z_interpolated > 1.0f) continue;
-                if(z_interpolated < zBuffer[y][x])
-                {
-                    float denom = alpha * w_1 + beta * w_2 + gamma * w_3;
-                    if (!std::isfinite(denom) || denom <= 0.0f) continue;
-                    //经过下面的变换之后alpha,beta,gamma就还原成了世界空间的插值权重了
-
-                    alpha = alpha *w_1/denom;
-                    beta = beta * w_2/denom;
-                    gamma = gamma * w_3/denom;
-
-                    Eigen::Vector3f normal = alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal;
-                    Eigen::Vector3f worldPosition = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
-                    if (!normal.allFinite() || normal.squaredNorm() <= 1e-12f || !worldPosition.allFinite()) continue;
-                    normal.normalize();
-                    Eigen::Vector3f color = shadeModel.computeShading(model.materialFor(triangle), eye, worldPosition, normal);
-                    if (!color.allFinite()) continue;
-                    zBuffer[y][x] = z_interpolated;
-                    normalBuffer[y][x] = normal;
-                    frameBuffer[y][x] = color;
-                }
-
-                /*
-                if(x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) continue;
-                float alpha, beta, gamma;
-                Transform::computeBarycentric2D(Eigen::Vector3f(x+0.5f,y+0.5f,0.0f),screenTriangle[0],screenTriangle[1],screenTriangle[2],alpha, beta, gamma);
-                if(alpha < 0 || beta < 0 || gamma < 0) continue;
-                float denom = alpha * w_1 + beta * w_2 + gamma * w_3;
-                if (denom == 0.0f) continue;
-                alpha = alpha *w_1/denom;
-                beta = beta * w_2/denom;
-                gamma = gamma * w_3/denom;
-                Eigen::Vector3f world_interpolated_position = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
-                if((world_interpolated_position-eye).norm() < zBuffer[y][x])
-                {
-                    zBuffer[y][x] = (world_interpolated_position-eye).norm();
-                    normalBuffer[y][x] = (alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal).normalized();
-                    frameBuffer[y][x] = shadeModel.computeShading(model.materialFor(triangle), eye, world_interpolated_position, normalBuffer[y][x]);
-                }
-                */
+                rasterizePixel(triangle, material, screenTriangle, inverseW, eye, x, y);
             }
         }
 
+    }
+    resolveMSAA();
+}
+
+void rasterizer::rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
+                              const std::vector<Eigen::Vector3f>& screenTriangle, const std::vector<float>& inverseW,
+                              const Eigen::Vector3f& eye, int x, int y)
+{
+    std::array<bool, 4> visibleSamples{};
+    bool hasCoveredSample = false;
+    bool hasVisibleSample = false;
+    Eigen::Vector3f coveredWeights = Eigen::Vector3f::Zero();
+    for(int i = 0; i < 2; ++i)
+    {
+        for(int j = 0; j < 2; ++j)
+        {
+            const int sample = i * 2 + j;
+            const Eigen::Vector3f point(x + (i + 0.5f) * 0.5f, y + (j + 0.5f) * 0.5f, 0.0f);
+            float alpha, beta, gamma;
+            if(!Transform::computeBarycentric2D(point, screenTriangle[0], screenTriangle[1], screenTriangle[2], alpha, beta, gamma)) continue;
+            if(alpha < 0.0f || beta < 0.0f || gamma < 0.0f) continue;
+            if(!hasCoveredSample)
+            {
+                coveredWeights = Eigen::Vector3f(alpha, beta, gamma);
+                hasCoveredSample = true;
+            }
+            const float z = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
+            if(z >= subZBuffer[y][x][sample]) continue;
+            subZBuffer[y][x][sample] = z;
+            visibleSamples[sample] = true;
+            hasVisibleSample = true;
+        }
+    }
+    if(!hasVisibleSample) return;
+
+    // 每个三角形对当前像素只着色一次，中心不在三角形内时使用首个被覆盖的采样点。
+    float alpha, beta, gamma;
+    const Eigen::Vector3f center(x + 0.5f, y + 0.5f, 0.0f);
+    if(!Transform::computeBarycentric2D(center, screenTriangle[0], screenTriangle[1], screenTriangle[2], alpha, beta, gamma)
+       || alpha < 0.0f || beta < 0.0f || gamma < 0.0f)
+    {
+        alpha = coveredWeights.x();
+        beta = coveredWeights.y();
+        gamma = coveredWeights.z();
+    }
+    const float denom = alpha * inverseW[0] + beta * inverseW[1] + gamma * inverseW[2];
+    alpha = alpha * inverseW[0] / denom;
+    beta = beta * inverseW[1] / denom;
+    gamma = gamma * inverseW[2] / denom;
+    const Eigen::Vector3f worldPos = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
+    const Eigen::Vector3f normal = (alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal).normalized();
+    const Eigen::Vector3f color = shadeModel.computeShading(material, eye, worldPos, normal);
+    for(int sample = 0; sample < 4; ++sample)
+    {
+        if(visibleSamples[sample]) subFrameBuffer[y][x][sample] = color;
+    }
+}
+
+void rasterizer::resolveMSAA()
+{
+    const int height = static_cast<int>(frameBuffer.size());
+    const int width = static_cast<int>(frameBuffer.front().size());
+    for(int y = 0; y < height; ++y)
+    {
+        for(int x = 0; x < width; ++x)
+        {
+            Eigen::Vector3f color_sum = Eigen::Vector3f::Zero();
+            for(const auto& color : subFrameBuffer[y][x]) color_sum += color;
+            frameBuffer[y][x] = color_sum / 4.0f;
+        }
     }
 }
 
@@ -317,8 +199,14 @@ void rasterizer::clear()
         std::fill(row.begin(), row.end(), backgroundColor);
     for (auto& row : zBuffer)
         std::fill(row.begin(), row.end(), std::numeric_limits<float>::infinity());
-    for (auto& row : normalBuffer)
-        std::fill(row.begin(), row.end(), Eigen::Vector3f::Zero());
-    IntersectedTriangles.clear();
+    clearSubBuffers();
+}
+
+void rasterizer::clearSubBuffers()
+{
+    for(auto& row : subZBuffer)
+        for(auto& samples : row) samples.fill(std::numeric_limits<float>::infinity());
+    for(auto& row : subFrameBuffer)
+        for(auto& samples : row) samples.fill(backgroundColor);
 }
 

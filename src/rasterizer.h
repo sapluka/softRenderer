@@ -2,8 +2,22 @@
 
 #include "parameter.h"
 #include <vector>
-#include <Eigen/core>
+#include <array>
+#include <Eigen/Core>
+#include <glad/gl.h>
+#include <GLFW/glfw3.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <exception>
+#include <fstream>
+#include <iterator>
 #include <limits>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <utility>
 #include <cmath>
 #include <functional>
 #include "ray.h"
@@ -11,17 +25,18 @@
 #include "transform.h"
 #include "camera.h"
 #include "shadeModel.h"
-#include <unordered_set>
 
 
 class rasterizer {
     friend struct RasterizerDrawTestAccess;
     friend struct RasterizerTraceTestAccess;
+    friend struct RasterizerMSAATestAccess;
     private:
         std::vector<std::vector<Eigen::Vector3f>> frameBuffer; // 颜色缓冲区
         std::vector<std::vector<float>> zBuffer; // 深度缓冲区
-        std::vector<std::vector<Eigen::Vector3f>> normalBuffer; // 法线缓冲区
-        std::vector<objLoader::Triangle> IntersectedTriangles;
+        std::vector<std::vector<std::array<float, 4>>> subZBuffer; // 每个像素的四份采样深度
+        std::vector<std::vector<std::array<Eigen::Vector3f, 4>>> subFrameBuffer; // 每个像素的四份采样颜色
+        std::vector<std::vector<float>> zBufferLight; // 光源深度缓冲区
         shadeModel& shadeModel;
         const Eigen::Vector3f backgroundColor{0.5f, 0.8f, 0.9f};
         // 仅用于把 CPU 颜色缓冲显示到窗口，第一次 draw 时创建。
@@ -29,7 +44,14 @@ class rasterizer {
         unsigned int displayProgram = 0;
         unsigned int displayVAO = 0;
         std::vector<float> displayPixels;
-        //
+        void clearSubBuffers();
+        void resolveMSAA();//把每个像素的子像素的四份采样颜色平均后写入frameBuffer的单个像素
+        
+        void rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
+            const std::vector<Eigen::Vector3f>& screenTriangle, const std::vector<float>& inverseW,
+            const Eigen::Vector3f& eye, int x, int y);//负责记录每个子像素的color和z
+            
+        
         public:
         rasterizer() = delete;
         rasterizer(class shadeModel& s) : shadeModel(s) {}
@@ -44,6 +66,6 @@ class rasterizer {
                        const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());//负责光栅化,着色以及更新frameBuffer
         void draw();//负责把frameBuffer呈现在屏幕上
         void releaseDrawResources(); // 销毁窗口前，在同一个 OpenGL 上下文中调用
-        void clear();//清空frameBuffer,zBuffer,normalBuffer
+        void clear();//清空颜色、深度以及子样本缓冲
 
 };
