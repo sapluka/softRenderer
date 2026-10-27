@@ -1,7 +1,4 @@
 #include "transform.h"
-#include <Eigen/core>
-#include <cmath>
-#include <stdexcept>
 
 Eigen::Matrix4f Transform::getModelMatrix(std::vector<float>&scales,std::vector<float>&translates,Eigen::Vector3f axis,float theta)
 {

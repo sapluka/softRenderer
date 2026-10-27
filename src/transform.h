@@ -1,7 +1,9 @@
 #pragma once
 
-#include <Eigen/core>
+#include <Eigen/Core>
 #include <Eigen/Geometry>
+#include <cmath>
+#include <stdexcept>
 #include <vector>
 #include "objLoader.h"
 #include "parameter.h"
