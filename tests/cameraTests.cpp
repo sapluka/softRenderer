@@ -2,13 +2,26 @@
 #include "scene.h"
 #include "transform.h"
 
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+struct RasterizerMSAATestAccess {
+    static std::size_t coveredSamples(const rasterizer& renderer) {
+        std::size_t covered = 0;
+        for (const auto& row : renderer.subZBuffer)
+            for (const auto& samples : row)
+                for (float depth : samples) covered += std::isfinite(depth);
+        return covered;
+    }
+};
 
 namespace {
 using Eigen::Vector3f;
@@ -47,6 +60,67 @@ struct OrbitScene {
     OrbitScene(const Vector3f& eye, const Vector3f& target,
                const Vector3f& up = Vector3f::UnitY())
         : rasterizer_(shader), camera_(eye, target, up), scene_(model, rasterizer_, camera_) {}
+};
+
+void checkFraming(const camera& camera, const Vector3f& minimum, const Vector3f& maximum) {
+    require(camera.getPosition().allFinite() && camera.getNearPlane() < 0.0f
+                && camera.getFarPlane() < camera.getNearPlane(),
+            "Automatic framing produced an invalid eye or clipping range.");
+    for (int corner = 0; corner < 8; ++corner) {
+        Vector3f point;
+        for (int axis = 0; axis < 3; ++axis)
+            point[axis] = corner & (1 << axis) ? maximum[axis] : minimum[axis];
+        float clipW;
+        const Vector3f screen = Transform::transform(point, camera.getPosition(), camera.getTarget(),
+            camera.getUp(), clipW, camera.getNearPlane(), camera.getFarPlane());
+        require(clipW > 0.0f && screen.allFinite()
+                    && screen.x() >= 0.0f && screen.x() <= SCREEN_WIDTH
+                    && screen.y() >= 0.0f && screen.y() <= SCREEN_HEIGHT
+                    && screen.z() >= -1.0001f && screen.z() <= 1.0001f,
+                "A model corner fell outside the automatically fitted view.");
+    }
+}
+
+void checkSphereDepth(const camera& camera, const Vector3f& center, float radius) {
+    require(camera.getNearPlane() < 0.0f && camera.getFarPlane() < camera.getNearPlane(),
+            "Moving the camera invalidated its clipping range.");
+    const Vector3f forward = (camera.getTarget() - camera.getPosition()).normalized();
+    for (float side : {-1.0f, 1.0f}) {
+        float clipW;
+        const Vector3f screen = Transform::transform(center + side * radius * forward,
+            camera.getPosition(), camera.getTarget(), camera.getUp(), clipW,
+            camera.getNearPlane(), camera.getFarPlane());
+        require(clipW > 0.0f && screen.allFinite()
+                    && screen.z() >= -1.0001f && screen.z() <= 1.0001f,
+                "A camera move clipped the retained model sphere in depth.");
+    }
+}
+
+class CornellSizedBox {
+public:
+    CornellSizedBox() {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        path = std::filesystem::temp_directory_path()
+            / ("renderer_camera_box_" + std::to_string(stamp) + ".obj");
+        std::ofstream stream(path);
+        stream << "v 0 0 0\nv 556 0 0\nv 556 548.8 0\nv 0 548.8 0\n"
+                  "v 0 0 559.2\nv 556 0 559.2\nv 556 548.8 559.2\nv 0 548.8 559.2\n"
+                  "f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 4 8 7 3\n"
+                  "f 1 5 8 4\nf 2 3 7 6\n";
+        stream.close();
+        require(static_cast<bool>(stream), "Cannot write Cornell-sized camera fixture.");
+        require(model.loadObj(path), "Cannot load Cornell-sized camera fixture: " + model.error());
+    }
+
+    ~CornellSizedBox() {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+    }
+
+    objLoader model;
+
+private:
+    std::filesystem::path path;
 };
 } // namespace
 
@@ -197,6 +271,84 @@ int main() {
                 "Fallback camera basis is not orthonormal.");
         require(std::abs(orientation.determinant() - 1.0f) < 2e-4f,
                 "Fallback camera basis changed handedness.");
+    });
+
+    run("automatic framing fits translated models at different scales and flat models", [] {
+        for (float scale : {.001f, 1.0f, 1000.0f}) {
+            const Vector3f center = scale * Vector3f(3.0f, -2.0f, 7.0f);
+            const Vector3f extent = scale * Vector3f(3.0f, 2.0f, 4.0f);
+            const Vector3f minimum = center - extent;
+            const Vector3f maximum = center + extent;
+            const camera fitted(minimum, maximum);
+            requireNear(fitted.getTarget(), center, "Automatic framing ignored the model center.");
+            require(fitted.getPosition().z() > center.z(), "Initial eye was not placed along positive Z.");
+            checkFraming(fitted, minimum, maximum);
+        }
+        const Vector3f minimum(-500.0f, -400.0f, 25.0f);
+        const Vector3f maximum(500.0f, 400.0f, 25.0f);
+        checkFraming(camera(minimum, maximum), minimum, maximum);
+    });
+
+    run("fitted camera retains depth coverage through orbit zoom and target changes", [] {
+        const Vector3f center(278.0f, 274.4f, 279.6f);
+        const Vector3f extent(278.0f, 274.4f, 279.6f);
+        camera fitted(center - extent, center + extent);
+        objLoader model;
+        shadeModel shader;
+        rasterizer renderer(shader);
+        scene scene(model, renderer, fitted);
+        const Vector3f initialEye = fitted.getPosition();
+        scene.rotateCamera(0.0, 0.0, 140.0, 170.0);
+        require((fitted.getPosition() - initialEye).norm() > 1.0f, "Framed camera did not orbit.");
+        checkFraming(fitted, center - extent, center + extent);
+        fitted.setPosition(fitted.getTarget() + (fitted.getPosition() - fitted.getTarget()) * 1.8f);
+        checkSphereDepth(fitted, center, extent.norm());
+        fitted.setPosition(fitted.getTarget() + (fitted.getPosition() - fitted.getTarget()) * .45f);
+        checkSphereDepth(fitted, center, extent.norm());
+        const Vector3f eye = fitted.getPosition();
+        fitted.setTarget(center + Vector3f(100.0f, -50.0f, 0.0f));
+        requireNear(fitted.getPosition(), eye, "Updating the clipping range reset the camera eye.");
+        checkSphereDepth(fitted, center, extent.norm());
+        fitted.setPosition(fitted.getTarget() + (fitted.getPosition() - fitted.getTarget()) * .1f);
+        require((fitted.getPosition() - center).norm() < extent.norm(),
+                "The zoom fixture did not enter the model sphere.");
+        require(fitted.getNearPlane() < 0.0f && fitted.getFarPlane() < fitted.getNearPlane()
+                    && Transform::getProjectionMatrix(fitted.getNearPlane(), fitted.getFarPlane()).allFinite(),
+                "Zooming inside the model sphere invalidated the projection.");
+    });
+
+    run("default cameras and projection calls retain the original clipping range", [] {
+        camera original;
+        require(original.getNearPlane() == z_near && original.getFarPlane() == z_far,
+                "The default camera changed the original clipping range.");
+        original.setPosition(Vector3f(0.0f, 0.0f, 5.0f));
+        original.setTarget(Vector3f::Zero());
+        require(original.getNearPlane() == z_near && original.getFarPlane() == z_far,
+                "Moving an unfitted camera enabled automatic clipping.");
+        require((Transform::getProjectionMatrix()
+                    - Transform::getProjectionMatrix(z_near, z_far)).norm() < 1e-6f,
+                "Default projection changed when clipping parameters became configurable.");
+        float clipW;
+        requireNear(Transform::transform(Vector3f::Zero(), original.getPosition(), original.getTarget()),
+            Transform::transform(Vector3f::Zero(), original.getPosition(), original.getTarget(),
+                original.getUp(), clipW, z_near, z_far),
+            "Default screen transform differs from explicit original clipping planes.");
+    });
+
+    run("Cornell-sized geometry rasterizes with the fitted clipping range", [] {
+        const CornellSizedBox box;
+        const camera fitted(Vector3f::Zero(), Vector3f(556.0f, 548.8f, 559.2f));
+        shadeModel shader;
+        rasterizer renderer(shader);
+        renderer.initRasterizer();
+        renderer.rasterize(box.model, fitted.getPosition(), fitted.getTarget(), fitted.getUp());
+        require(RasterizerMSAATestAccess::coveredSamples(renderer) == 0,
+                "Cornell-sized fixture no longer reproduces the original far-plane clipping.");
+        renderer.clear();
+        renderer.rasterize(box.model, fitted.getPosition(), fitted.getTarget(), fitted.getUp(),
+                           fitted.getNearPlane(), fitted.getFarPlane());
+        require(RasterizerMSAATestAccess::coveredSamples(renderer) > 0,
+                "Automatic camera clipping still rejected every Cornell-sized sample.");
     });
 
     return failed == 0 ? 0 : 1;

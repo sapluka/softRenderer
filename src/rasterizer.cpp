@@ -38,7 +38,7 @@ void rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& orig
 
 
 void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
-                           const Eigen::Vector3f& up) {
+                           const Eigen::Vector3f& up, float nearPlane, float farPlane) {
 
     if (frameBuffer.empty()) initRasterizer();
     const int width = static_cast<int>(frameBuffer.front().size());
@@ -52,7 +52,7 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& origin
         std::vector<Eigen::Vector3f> screenTriangle;
         std::vector<float> inverseW;
         std::array<int, 4> bounds;
-        if(!prepareTriangle(triangle, origin, target, up, screenTriangle, inverseW, bounds)) continue;
+        if(!prepareTriangle(triangle, origin, target, up, screenTriangle, inverseW, bounds, nearPlane, farPlane)) continue;
 
         const auto& material = model.materialFor(triangle);
         for(int x = bounds[0]; x <= bounds[1]; ++x)
@@ -71,12 +71,12 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& origin
 bool rasterizer::prepareTriangle(const objLoader::Triangle& triangle, const Eigen::Vector3f& origin,
                                  const Eigen::Vector3f& target, const Eigen::Vector3f& up,
                                  std::vector<Eigen::Vector3f>& screenTriangle, std::vector<float>& inverseW,
-                                 std::array<int, 4>& bounds)
+                                 std::array<int, 4>& bounds, float nearPlane, float farPlane)
 {
     for(const auto& vertex : triangle.vertices)
     {
         float clipW;
-        const Eigen::Vector3f screenPos = Transform::transform(vertex.position, origin, target, up, clipW);
+        const Eigen::Vector3f screenPos = Transform::transform(vertex.position, origin, target, up, clipW, nearPlane, farPlane);
         if(!std::isfinite(clipW) || clipW <= 0.0f || !screenPos.allFinite()) return false;
         screenTriangle.push_back(screenPos);
         inverseW.push_back(1.0f / clipW);

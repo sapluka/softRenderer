@@ -55,14 +55,14 @@ Eigen::Matrix4f Transform::getViewMatrix(const Eigen::Vector3f& eye, const Eigen
     return view;
 }
 
-Eigen::Matrix4f Transform::getProjectionMatrix()
+Eigen::Matrix4f Transform::getProjectionMatrix(float nearPlane, float farPlane)
 {
     float f = 1.0f / tan(fov_y / 2.0f);
 
     Eigen::Matrix4f projection;
     projection<<f/aspect_ratio,0.0f,0.0f,0.0f,
                 0.0f,f,0.0f,0.0f,
-                0.0f,0.0f,-(z_near+z_far)/(z_far-z_near),2.0f*z_near*z_far/(z_far-z_near),
+                0.0f,0.0f,-(nearPlane+farPlane)/(farPlane-nearPlane),2.0f*nearPlane*farPlane/(farPlane-nearPlane),
                 0.0f,0.0f,-1.0f,0.0f;
     return projection;
     //这里可能会出现z的正负定义问题，明天检查一下(已检查完毕)
@@ -136,12 +136,12 @@ Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::
 }
 
 Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye, const Eigen::Vector3f& target,
-                                     const Eigen::Vector3f& up, float& clipW)
+                                     const Eigen::Vector3f& up, float& clipW, float nearPlane, float farPlane)
 {
     Eigen::Vector4f worldPos(point.x(), point.y(), point.z(), 1.0f);
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f view = Transform::getViewMatrix(eye, target, up);
-    Eigen::Matrix4f projection = Transform::getProjectionMatrix();
+    Eigen::Matrix4f projection = Transform::getProjectionMatrix(nearPlane, farPlane);
     Eigen::Vector4f clipSpacePos = projection * view * model * worldPos;
     clipW = clipSpacePos.w();
     Eigen::Vector4f ndcPos = Transform::getNDC(clipSpacePos);

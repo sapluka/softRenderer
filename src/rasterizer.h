@@ -50,7 +50,8 @@ class rasterizer {
         bool prepareTriangle(const objLoader::Triangle& triangle, const Eigen::Vector3f& origin,
                              const Eigen::Vector3f& target, const Eigen::Vector3f& up,
                              std::vector<Eigen::Vector3f>& screenTriangle, std::vector<float>& inverseW,
-                             std::array<int, 4>& bounds);
+                             std::array<int, 4>& bounds,
+                             float nearPlane = z_near, float farPlane = z_far);
         void updateDepthBuffer(const std::vector<Eigen::Vector3f>& screenTriangle,
                                std::vector<std::vector<float>>& buffer, int x, int y);
         float getShadowVisibility(const Eigen::Vector3f& worldPos) const;
@@ -70,7 +71,8 @@ class rasterizer {
         void setGBuffers(const objLoader& model,const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
                          const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());
         void rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
-                       const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());//负责光栅化,着色以及更新frameBuffer
+                       const Eigen::Vector3f& up = Eigen::Vector3f::UnitY(),
+                       float nearPlane = z_near, float farPlane = z_far);//负责光栅化,着色以及更新frameBuffer
         void draw();//负责把frameBuffer呈现在屏幕上
         void releaseDrawResources(); // 销毁窗口前，在同一个 OpenGL 上下文中调用
         void clear();//清空颜色、深度以及子样本缓冲

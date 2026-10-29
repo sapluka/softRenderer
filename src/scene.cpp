@@ -96,7 +96,8 @@ void scene::render() {
         // 我们去进行一个渲染。如果我们想要加入阴影和全局光照，肯定是要再用两个函数。
         //一个是更新Shadow Map的函数，一个是计算GI的函数吗？
 
-        rasterizer_.rasterize(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp());
+        rasterizer_.rasterize(model_, camera_.getPosition(), camera_.getTarget(), camera_.getUp(),
+                             camera_.getNearPlane(), camera_.getFarPlane());
         sync();
         rasterizer_.draw();
         glfwSwapBuffers(window);

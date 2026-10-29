@@ -49,11 +49,7 @@ int main()
     rasterizer ras = rasterizer(shademodel);
     ras.initRasterizer();
      
-    camera cam = camera();
-    cam.setTarget(target);
-    auto  length = *(max_z)-*(min_z);
-    const Eigen::Vector3f cam_pos = Eigen::Vector3f(0.0f,0.0f,2.0f*length)+target;
-    cam.setPosition(cam_pos);
+    camera cam(point_min, point_max);
 
     scene sce = scene(mod,ras,cam);
 
