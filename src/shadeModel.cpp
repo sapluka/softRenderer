@@ -1,9 +1,6 @@
 #include "shadeModel.h"
-#include "light.h"
-#include <Eigen/Core>
-#include <cmath>
 
-Eigen::Vector3f shadeModel::computeShading(const objLoader::Material& material, const Eigen::Vector3f& camera, const Eigen::Vector3f& point, const Eigen::Vector3f& normal) const {
+Eigen::Vector3f shadeModel::computeShading(const objLoader::Material& material, const Eigen::Vector3f& camera, const Eigen::Vector3f& point, const Eigen::Vector3f& normal , float visibility) const {
     // 计算光源方向
     Eigen::Vector3f lightDir = (sceneLight.getPosition() - point).normalized();
     
@@ -17,6 +14,6 @@ Eigen::Vector3f shadeModel::computeShading(const objLoader::Material& material, 
     // 计算最终颜色，假设光源颜色为白色，强度为 1.0
     Eigen::Vector3f color_diffuse = material.diffuse.cwiseProduct(sceneLight.getColor()) * std::max(0.0f, lightDir.dot(normal)); 
     Eigen::Vector3f color_specular = material.specular.cwiseProduct(sceneLight.getColor()) * std::pow(std::max(0.0f, h.dot(normal)), material.shininess);
-    Eigen::Vector3f finalColor = color_ambient + color_diffuse + color_specular;
+    Eigen::Vector3f finalColor = color_ambient + (color_diffuse + color_specular)*visibility;
     return finalColor;
 }

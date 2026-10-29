@@ -3,6 +3,7 @@
 void rasterizer::initRasterizer() {
     frameBuffer.assign(SCREEN_HEIGHT,std::vector<Eigen::Vector3f>(SCREEN_WIDTH,backgroundColor));
     zBuffer.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,std::numeric_limits<float>::infinity()));
+    zBufferLight.assign(SCREEN_HEIGHT,std::vector<float>(SCREEN_WIDTH,std::numeric_limits<float>::infinity()));
     subZBuffer.assign(SCREEN_HEIGHT,std::vector<std::array<float, 4>>(SCREEN_WIDTH));
     subFrameBuffer.assign(SCREEN_HEIGHT,std::vector<std::array<Eigen::Vector3f, 4>>(SCREEN_WIDTH));
     clearSubBuffers();
@@ -10,49 +11,56 @@ void rasterizer::initRasterizer() {
 
 
 
-bool rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& origin,
-                            const Eigen::Vector3f& target, const Eigen::Vector3f& up,
-                            unsigned int threadCount,
-                            const std::function<bool(int, int)>& progress) {
-
-
-}
-
-void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
-                           const Eigen::Vector3f& up) {
-
+void rasterizer::setGBuffers(const objLoader& model, const Eigen::Vector3f& origin,
+                            const Eigen::Vector3f& target, const Eigen::Vector3f& up) {
     if (frameBuffer.empty()) initRasterizer();
-    const int height = static_cast<int>(frameBuffer.size());
     const int width = static_cast<int>(frameBuffer.front().size());
     if (width == 0) return;
+    clearDepthBuffer(zBufferLight);
 
     for(const auto& triangle: model.triangles())
     {
 
-        std::vector<Eigen::Vector3f>screenTriangle;
+        std::vector<Eigen::Vector3f> screenTriangle;
         std::vector<float> inverseW;
-        for(const auto& vertex: triangle.vertices)
+        std::array<int, 4> bounds;
+        if(!prepareTriangle(triangle, origin, target, up, screenTriangle, inverseW, bounds)) continue;
+        for(int x = bounds[0]; x <= bounds[1]; ++x)
         {
-            float clipW;
-            Eigen::Vector3f screenPos = Transform::transform(vertex.position, eye, target, up, clipW);
-            if (!std::isfinite(clipW) || clipW <= 0.0f || !screenPos.allFinite()) break;
-            screenTriangle.push_back(screenPos);
-            inverseW.push_back(1.0f / clipW);
+            for(int y = bounds[2]; y <= bounds[3]; ++y)
+            {
+                updateDepthBuffer(screenTriangle, zBufferLight, x, y);
+            }
         }
-        if (screenTriangle.size() != 3) continue;
 
-        float min_x = std::max(0.0f, std::min({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
-        float max_x = std::min(static_cast<float>(width), std::max({screenTriangle[0].x(),screenTriangle[1].x(),screenTriangle[2].x()}));
-        float min_y = std::max(0.0f, std::min({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
-        float max_y = std::min(static_cast<float>(height), std::max({screenTriangle[0].y(),screenTriangle[1].y(),screenTriangle[2].y()}));
-        if (min_x > max_x || min_y > max_y) continue;
+    }
+}
+
+
+void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
+                           const Eigen::Vector3f& up) {
+
+    if (frameBuffer.empty()) initRasterizer();
+    const int width = static_cast<int>(frameBuffer.front().size());
+    if (width == 0) return;
+    const light& sceneLight = shadeModel.getLight();
+    setGBuffers(model, sceneLight.getPosition(), sceneLight.getTarget(), sceneLight.getUp());
+
+    for(const auto& triangle: model.triangles())
+    {
+
+        std::vector<Eigen::Vector3f> screenTriangle;
+        std::vector<float> inverseW;
+        std::array<int, 4> bounds;
+        if(!prepareTriangle(triangle, origin, target, up, screenTriangle, inverseW, bounds)) continue;
 
         const auto& material = model.materialFor(triangle);
-        for(int x = static_cast<int>(std::floor(min_x)); x <= std::min(width - 1, static_cast<int>(std::ceil(max_x))); ++x)
+        for(int x = bounds[0]; x <= bounds[1]; ++x)
         {
-            for(int y = static_cast<int>(std::floor(min_y)); y <= std::min(height - 1, static_cast<int>(std::ceil(max_y))); ++y)
+            for(int y = bounds[2]; y <= bounds[3]; ++y)
             {
-                rasterizePixel(triangle, material, screenTriangle, inverseW, eye, x, y);
+                updateDepthBuffer(screenTriangle, zBuffer, x, y);
+                rasterizePixel(triangle, material, screenTriangle, inverseW, origin, x, y);
             }
         }
 
@@ -60,9 +68,63 @@ void rasterizer::rasterize(const objLoader& model, const Eigen::Vector3f& eye,co
     resolveMSAA();
 }
 
+bool rasterizer::prepareTriangle(const objLoader::Triangle& triangle, const Eigen::Vector3f& origin,
+                                 const Eigen::Vector3f& target, const Eigen::Vector3f& up,
+                                 std::vector<Eigen::Vector3f>& screenTriangle, std::vector<float>& inverseW,
+                                 std::array<int, 4>& bounds)
+{
+    for(const auto& vertex : triangle.vertices)
+    {
+        float clipW;
+        const Eigen::Vector3f screenPos = Transform::transform(vertex.position, origin, target, up, clipW);
+        if(!std::isfinite(clipW) || clipW <= 0.0f || !screenPos.allFinite()) return false;
+        screenTriangle.push_back(screenPos);
+        inverseW.push_back(1.0f / clipW);
+    }
+    const int height = static_cast<int>(frameBuffer.size());
+    const int width = static_cast<int>(frameBuffer.front().size());
+    const float min_x = std::max(0.0f, std::min({screenTriangle[0].x(), screenTriangle[1].x(), screenTriangle[2].x()}));
+    const float max_x = std::min(static_cast<float>(width), std::max({screenTriangle[0].x(), screenTriangle[1].x(), screenTriangle[2].x()}));
+    const float min_y = std::max(0.0f, std::min({screenTriangle[0].y(), screenTriangle[1].y(), screenTriangle[2].y()}));
+    const float max_y = std::min(static_cast<float>(height), std::max({screenTriangle[0].y(), screenTriangle[1].y(), screenTriangle[2].y()}));
+    if(min_x > max_x || min_y > max_y) return false;
+    bounds = {static_cast<int>(std::floor(min_x)), std::min(width - 1, static_cast<int>(std::ceil(max_x))),
+              static_cast<int>(std::floor(min_y)), std::min(height - 1, static_cast<int>(std::ceil(max_y)))};
+    return true;
+}
+
+void rasterizer::updateDepthBuffer(const std::vector<Eigen::Vector3f>& screenTriangle,
+                                   std::vector<std::vector<float>>& buffer, int x, int y)
+{
+    float alpha, beta, gamma;
+    const Eigen::Vector3f center(x + 0.5f, y + 0.5f, 0.0f);
+    if(!Transform::computeBarycentric2D(center, screenTriangle[0], screenTriangle[1], screenTriangle[2], alpha, beta, gamma)) return;
+    if(alpha < 0.0f || beta < 0.0f || gamma < 0.0f) return;
+    const float z = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
+    if(!std::isfinite(z) || z < -1.0f || z > 1.0f) return;
+    if(z < buffer[y][x]) buffer[y][x] = z;
+}
+
+float rasterizer::getShadowVisibility(const Eigen::Vector3f& worldPos) const
+{
+    const light& sceneLight = shadeModel.getLight();
+    float clipW;
+    const Eigen::Vector3f lightPos = Transform::transform(worldPos, sceneLight.getPosition(),
+                                                        sceneLight.getTarget(), sceneLight.getUp(), clipW);
+    const int height = static_cast<int>(zBufferLight.size());
+    const int width = static_cast<int>(zBufferLight.front().size());
+    // 这张二维深度图只覆盖光源视锥内的区域。
+    if(clipW <= 0.0f || lightPos.x() < 0.0f || lightPos.x() >= width || lightPos.y() < 0.0f || lightPos.y() >= height
+       || lightPos.z() < -1.0f || lightPos.z() > 1.0f) return 1.0f;
+    const int x = static_cast<int>(lightPos.x());
+    const int y = static_cast<int>(lightPos.y());
+    constexpr float shadowBias = 1e-4f;
+    return lightPos.z() > zBufferLight[y][x] + shadowBias ? 0.0f : 1.0f;
+}
+
 void rasterizer::rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
                               const std::vector<Eigen::Vector3f>& screenTriangle, const std::vector<float>& inverseW,
-                              const Eigen::Vector3f& eye, int x, int y)
+                              const Eigen::Vector3f& origin, int x, int y)
 {
     std::array<bool, 4> visibleSamples{};
     bool hasCoveredSample = false;
@@ -83,6 +145,7 @@ void rasterizer::rasterizePixel(const objLoader::Triangle& triangle, const objLo
                 hasCoveredSample = true;
             }
             const float z = alpha * screenTriangle[0].z() + beta * screenTriangle[1].z() + gamma * screenTriangle[2].z();
+            if(z < -1.0f || z > 1.0f) continue;
             if(z >= subZBuffer[y][x][sample]) continue;
             subZBuffer[y][x][sample] = z;
             visibleSamples[sample] = true;
@@ -106,8 +169,9 @@ void rasterizer::rasterizePixel(const objLoader::Triangle& triangle, const objLo
     beta = beta * inverseW[1] / denom;
     gamma = gamma * inverseW[2] / denom;
     const Eigen::Vector3f worldPos = alpha * triangle.vertices[0].position + beta * triangle.vertices[1].position + gamma * triangle.vertices[2].position;
+    const float visibility = getShadowVisibility(worldPos);
     const Eigen::Vector3f normal = (alpha * triangle.vertices[0].normal + beta * triangle.vertices[1].normal + gamma * triangle.vertices[2].normal).normalized();
-    const Eigen::Vector3f color = shadeModel.computeShading(material, eye, worldPos, normal);
+    const Eigen::Vector3f color = shadeModel.computeShading(material, origin, worldPos, normal, visibility);
     for(int sample = 0; sample < 4; ++sample)
     {
         if(visibleSamples[sample]) subFrameBuffer[y][x][sample] = color;
@@ -197,9 +261,15 @@ void rasterizer::clear()
 {
     for (auto& row : frameBuffer)
         std::fill(row.begin(), row.end(), backgroundColor);
-    for (auto& row : zBuffer)
-        std::fill(row.begin(), row.end(), std::numeric_limits<float>::infinity());
+    clearDepthBuffer(zBuffer);
+    clearDepthBuffer(zBufferLight);
     clearSubBuffers();
+}
+
+void rasterizer::clearDepthBuffer(std::vector<std::vector<float>>& buffer)
+{
+    for(auto& row : buffer)
+        std::fill(row.begin(), row.end(), std::numeric_limits<float>::infinity());
 }
 
 void rasterizer::clearSubBuffers()

@@ -20,7 +20,6 @@
 #include <utility>
 #include <cmath>
 #include <functional>
-#include "ray.h"
 #include "objLoader.h"
 #include "transform.h"
 #include "camera.h"
@@ -31,6 +30,7 @@ class rasterizer {
     friend struct RasterizerDrawTestAccess;
     friend struct RasterizerTraceTestAccess;
     friend struct RasterizerMSAATestAccess;
+    friend struct RasterizerShadowTestAccess;
     private:
         std::vector<std::vector<Eigen::Vector3f>> frameBuffer; // 颜色缓冲区
         std::vector<std::vector<float>> zBuffer; // 深度缓冲区
@@ -44,8 +44,16 @@ class rasterizer {
         unsigned int displayProgram = 0;
         unsigned int displayVAO = 0;
         std::vector<float> displayPixels;
+        void clearDepthBuffer(std::vector<std::vector<float>>& buffer);
         void clearSubBuffers();
         void resolveMSAA();//把每个像素的子像素的四份采样颜色平均后写入frameBuffer的单个像素
+        bool prepareTriangle(const objLoader::Triangle& triangle, const Eigen::Vector3f& origin,
+                             const Eigen::Vector3f& target, const Eigen::Vector3f& up,
+                             std::vector<Eigen::Vector3f>& screenTriangle, std::vector<float>& inverseW,
+                             std::array<int, 4>& bounds);
+        void updateDepthBuffer(const std::vector<Eigen::Vector3f>& screenTriangle,
+                               std::vector<std::vector<float>>& buffer, int x, int y);
+        float getShadowVisibility(const Eigen::Vector3f& worldPos) const;
         
         void rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
             const std::vector<Eigen::Vector3f>& screenTriangle, const std::vector<float>& inverseW,
@@ -58,14 +66,14 @@ class rasterizer {
         rasterizer(const rasterizer&) = delete;
         rasterizer& operator=(const rasterizer&) = delete;
         void initRasterizer();
-        bool setGBuffers(const objLoader& model,const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
-                         const Eigen::Vector3f& up = Eigen::Vector3f::UnitY(),
-                         unsigned int threadCount = 0,
-                         const std::function<bool(int, int)>& progress = {});
+        //从光源视角生成zBufferLight
+        void setGBuffers(const objLoader& model,const Eigen::Vector3f& origin,const Eigen::Vector3f& target,
+                         const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());
         void rasterize(const objLoader& model, const Eigen::Vector3f& eye,const Eigen::Vector3f& target,
                        const Eigen::Vector3f& up = Eigen::Vector3f::UnitY());//负责光栅化,着色以及更新frameBuffer
         void draw();//负责把frameBuffer呈现在屏幕上
         void releaseDrawResources(); // 销毁窗口前，在同一个 OpenGL 上下文中调用
         void clear();//清空颜色、深度以及子样本缓冲
+
 
 };
