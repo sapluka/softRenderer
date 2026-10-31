@@ -32,11 +32,17 @@ class rasterizer {
     friend struct RasterizerMSAATestAccess;
     friend struct RasterizerShadowTestAccess;
     private:
+        struct ScreenTriangle {
+            std::vector<Eigen::Vector3f> vertices;
+            std::vector<float> inverseW;
+            std::array<int, 4> bounds;
+        };
         std::vector<std::vector<Eigen::Vector3f>> frameBuffer; // 颜色缓冲区
         std::vector<std::vector<float>> zBuffer; // 深度缓冲区
         std::vector<std::vector<std::array<float, 4>>> subZBuffer; // 每个像素的四份采样深度
         std::vector<std::vector<std::array<Eigen::Vector3f, 4>>> subFrameBuffer; // 每个像素的四份采样颜色
         std::vector<std::vector<float>> zBufferLight; // 光源深度缓冲区
+        Transform lightTransform; // 与当前阴影图对应的变换，供片元查询复用
         shadeModel& shadeModel;
         const Eigen::Vector3f backgroundColor{0.5f, 0.8f, 0.9f};
         // 仅用于把 CPU 颜色缓冲显示到窗口，第一次 draw 时创建。
@@ -47,17 +53,14 @@ class rasterizer {
         void clearDepthBuffer(std::vector<std::vector<float>>& buffer);
         void clearSubBuffers();
         void resolveMSAA();//把每个像素的子像素的四份采样颜色平均后写入frameBuffer的单个像素
-        bool prepareTriangle(const objLoader::Triangle& triangle, const Eigen::Vector3f& origin,
-                             const Eigen::Vector3f& target, const Eigen::Vector3f& up,
-                             std::vector<Eigen::Vector3f>& screenTriangle, std::vector<float>& inverseW,
-                             std::array<int, 4>& bounds,
-                             float nearPlane = z_near, float farPlane = z_far);
+        bool prepareTriangle(const objLoader::Triangle& triangle, const Transform& viewTransform,
+                             ScreenTriangle& screenTriangle);
         void updateDepthBuffer(const std::vector<Eigen::Vector3f>& screenTriangle,
                                std::vector<std::vector<float>>& buffer, int x, int y);
         float getShadowVisibility(const Eigen::Vector3f& worldPos) const;
         
         void rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
-            const std::vector<Eigen::Vector3f>& screenTriangle, const std::vector<float>& inverseW,
+            const ScreenTriangle& screenTriangle,
             const Eigen::Vector3f& eye, int x, int y);//负责记录每个子像素的color和z
             
         

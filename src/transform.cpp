@@ -1,5 +1,22 @@
 #include "transform.h"
 
+Transform::Transform(const Eigen::Vector3f& eye, const Eigen::Vector3f& target, const Eigen::Vector3f& up,
+                     int buffer_width, int buffer_height, float nearPlane, float farPlane)
+    : viewProjection(getProjectionMatrix(nearPlane, farPlane) * getViewMatrix(eye, target, up)),
+      viewport(getViewportMatrix(buffer_width, buffer_height)),
+      bufferWidth(buffer_width), bufferHeight(buffer_height)
+{}
+
+Eigen::Vector3f Transform::apply(const Eigen::Vector3f& point, float& clipW) const
+{
+    const Eigen::Vector4f worldPos(point.x(), point.y(), point.z(), 1.0f);
+    const Eigen::Vector4f clipSpacePos = viewProjection * worldPos;
+    clipW = clipSpacePos.w();
+    const Eigen::Vector4f ndcPos = getNDC(clipSpacePos);
+    const Eigen::Vector4f screenPos = viewport * ndcPos;
+    return screenPos.head<3>();
+}
+
 Eigen::Matrix4f Transform::getModelMatrix(std::vector<float>&scales,std::vector<float>&translates,Eigen::Vector3f axis,float theta)
 {
     Eigen::Matrix4f scale;
@@ -79,11 +96,11 @@ Eigen::Vector4f Transform::getNDC(const Eigen::Vector4f& clipSpacePoint)
     return ndc;
 }
 
-Eigen::Matrix4f Transform::getViewportMatrix()
+Eigen::Matrix4f Transform::getViewportMatrix(int buffer_width, int buffer_height)
 {
     Eigen::Matrix4f viewport;
-    viewport<<SCREEN_WIDTH/2.0f,0.0f,0.0f,SCREEN_WIDTH/2.0f,
-              0.0f,-SCREEN_HEIGHT/2.0f,0.0f,SCREEN_HEIGHT/2.0f,
+    viewport<<buffer_width/2.0f,0.0f,0.0f,buffer_width/2.0f,
+              0.0f,-buffer_height/2.0f,0.0f,buffer_height/2.0f,
               0.0f,0.0f,1.0f,0.0f,
               0.0f,0.0f,0.0f,1.0f;
     return viewport;
@@ -136,16 +153,9 @@ Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::
 }
 
 Eigen::Vector3f Transform::transform(const Eigen::Vector3f& point, const Eigen::Vector3f& eye, const Eigen::Vector3f& target,
-                                     const Eigen::Vector3f& up, float& clipW, float nearPlane, float farPlane)
+                                     const Eigen::Vector3f& up, float& clipW, float nearPlane, float farPlane,
+                                     int buffer_width, int buffer_height)
 {
-    Eigen::Vector4f worldPos(point.x(), point.y(), point.z(), 1.0f);
-    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
-    Eigen::Matrix4f view = Transform::getViewMatrix(eye, target, up);
-    Eigen::Matrix4f projection = Transform::getProjectionMatrix(nearPlane, farPlane);
-    Eigen::Vector4f clipSpacePos = projection * view * model * worldPos;
-    clipW = clipSpacePos.w();
-    Eigen::Vector4f ndcPos = Transform::getNDC(clipSpacePos);
-    Eigen::Matrix4f viewport = Transform::getViewportMatrix();
-    Eigen::Vector4f screenPos = viewport * ndcPos;
-    return Eigen::Vector3f(screenPos.x(), screenPos.y(), screenPos.z());
+    const Transform viewTransform(eye, target, up, buffer_width, buffer_height, nearPlane, farPlane);
+    return viewTransform.apply(point, clipW);
 }

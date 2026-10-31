@@ -12,6 +12,18 @@ struct RasterizerShadowTestAccess {
     static const std::vector<std::vector<float>>& lightDepths(const rasterizer& renderer) {
         return renderer.zBufferLight;
     }
+    static void resizeLight(rasterizer& renderer, int width, int height) {
+        renderer.zBufferLight.assign(height,
+            std::vector<float>(width, std::numeric_limits<float>::infinity()));
+        const light& source = renderer.shadeModel.getLight();
+        renderer.lightTransform = Transform(source.getPosition(), source.getTarget(), source.getUp(), width, height);
+    }
+    static void setLightDepth(rasterizer& renderer, int x, int y, float depth) {
+        renderer.zBufferLight[y][x] = depth;
+    }
+    static void fillLightDepth(rasterizer& renderer, float depth) {
+        for (auto& row : renderer.zBufferLight) std::fill(row.begin(), row.end(), depth);
+    }
     static void fillCameraDepth(rasterizer& renderer, float depth) {
         for (auto& row : renderer.zBuffer) std::fill(row.begin(), row.end(), depth);
     }
@@ -107,7 +119,8 @@ void buildMap(rasterizer& renderer, const objLoader& model, const light& source)
 }
 
 float centerDepth(const rasterizer& renderer) {
-    return RasterizerShadowTestAccess::lightDepths(renderer)[SCREEN_HEIGHT / 2][SCREEN_WIDTH / 2];
+    const auto& depths = RasterizerShadowTestAccess::lightDepths(renderer);
+    return depths[depths.size() / 2][depths.front().size() / 2];
 }
 
 void requireVisibility(const rasterizer& renderer, const Vector3f& point, float expected,
@@ -133,6 +146,35 @@ int main() {
             std::cerr << "FAIL " << name << ": " << error.what() << '\n';
         }
     };
+
+    run("shadow viewport covers its larger buffer independently of camera dimensions", [&] {
+        const auto& depths = RasterizerShadowTestAccess::lightDepths(renderer);
+        require(depths.size() == SHADOW_MAP_HEIGHT && depths.front().size() == SHADOW_MAP_WIDTH,
+                "The shadow map did not allocate its independent dimensions.");
+        require(SHADOW_MAP_WIDTH == SCREEN_WIDTH * 2 && SHADOW_MAP_HEIGHT == SCREEN_HEIGHT * 2,
+                "The configured shadow map does not have four times as many texels.");
+        const Eigen::Matrix4f viewport = Transform::getViewportMatrix(SHADOW_MAP_WIDTH, SHADOW_MAP_HEIGHT);
+        requireNear((viewport * Eigen::Vector4f(-1, 1, 0, 1)).head<3>(), Vector3f::Zero(),
+                    "The shadow viewport did not map the upper-left NDC corner to the origin.");
+        requireNear((viewport * Eigen::Vector4f(1, -1, 0, 1)).head<3>(),
+                    Vector3f(SHADOW_MAP_WIDTH, SHADOW_MAP_HEIGHT, 0),
+                    "The shadow viewport retained the camera dimensions.");
+
+        Face shifted = blocker(2.0f);
+        for (auto& point : shifted.points) point += Vector3f(1.0f, -.6f, 0.0f);
+        const objLoader shiftedModel = files.model("large_viewport.obj", {shifted});
+        buildMap(renderer, shiftedModel, source);
+        float clipW;
+        const Vector3f screen = Transform::transform(Vector3f(1, -.6f, -2), source.getPosition(),
+            source.getTarget(), source.getUp(), clipW, z_near, z_far, SHADOW_MAP_WIDTH, SHADOW_MAP_HEIGHT);
+        const int x = static_cast<int>(screen.x());
+        const int y = static_cast<int>(screen.y());
+        require(x >= SCREEN_WIDTH && x < SHADOW_MAP_WIDTH && y >= SCREEN_HEIGHT && y < SHADOW_MAP_HEIGHT,
+                "The fixture does not cover the newly available shadow region.");
+        require(std::isfinite(depths[y][x]), "Rasterization stopped at the old camera bounds.");
+        requireVisibility(renderer, Vector3f(2, -1.2f, -4), 0.0f,
+                          "Shadow queries did not use the same larger viewport as map generation.");
+    });
 
     run("light depth keeps the nearest triangle independently of camera depth and draw order", [&] {
         shader.setLight(source);
@@ -217,6 +259,37 @@ int main() {
         const Vector3f color = RasterizerShadowTestAccess::pixel(renderer, static_cast<int>(screen.x()), static_cast<int>(screen.y()));
         require(color.x() > .6f && color.y() > .4f && color.z() > .2f,
                 "An unobstructed receiver lost direct illumination.");
+    });
+
+    run("PCF compares all nine depths before averaging visibility for one receiver", [&] {
+        shader.setLight(source);
+        const float receiverDepth = Transform::transform(receiverPoint, source.getPosition(),
+            source.getTarget(), source.getUp()).z();
+        for (int blocked = 0; blocked <= 9; ++blocked) {
+            RasterizerShadowTestAccess::resizeLight(renderer, 7, 5);
+            for (int sample = 0; sample < blocked; ++sample)
+                RasterizerShadowTestAccess::setLightDepth(renderer,
+                    3 + sample % 3 - 1, 2 + sample / 3 - 1, receiverDepth - .01f);
+            const float visibility = RasterizerShadowTestAccess::visibility(renderer, receiverPoint);
+            require(std::abs(visibility - (9 - blocked) / 9.0f) < 1e-6f,
+                    "PCF did not average the nine independent depth comparisons.");
+        }
+    });
+
+    run("PCF treats missing border taps as unoccluded without reading outside the map", [&] {
+        RasterizerShadowTestAccess::resizeLight(renderer, 7, 5);
+        RasterizerShadowTestAccess::fillLightDepth(renderer, -1.0f);
+        const Eigen::Matrix4f projection = Transform::getProjectionMatrix();
+        for (float x : {.5f, 6.5f}) {
+            for (float y : {.5f, 4.5f}) {
+                const Vector3f point((2.0f * x / 7.0f - 1.0f) * 4.0f / projection(0, 0),
+                                    (1.0f - 2.0f * y / 5.0f) * 4.0f / projection(1, 1), -4.0f);
+                require(std::abs(RasterizerShadowTestAccess::visibility(renderer, point) - 5.0f / 9.0f) < 1e-6f,
+                        "PCF border taps did not retain the fixed nine-sample weighting.");
+            }
+        }
+        requireVisibility(renderer, Vector3f(100, 0, -2), 1.0f,
+                          "A receiver outside the shadow map lost the unoccluded fallback.");
     });
 
     return failed == 0 ? 0 : 1;

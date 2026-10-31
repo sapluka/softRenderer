@@ -261,6 +261,38 @@ int main() {
                 "Screen transform did not apply camera roll.");
     });
 
+    run("prepared transforms preserve clip w and viewport coordinates for both passes", [] {
+        for (const Vector3f up : {Vector3f::UnitY().eval(), Vector3f::UnitX().eval()}) {
+            const Vector3f eye(4.0f, 3.0f, 11.0f);
+            const Vector3f target(1.0f, -2.0f, 3.0f);
+            const Eigen::Matrix4f view = Transform::getViewMatrix(eye, target, up);
+            const Eigen::Matrix4f projection = Transform::getProjectionMatrix(-.25f, -250.0f);
+            for (int scale : {1, 2}) {
+                const int width = SCREEN_WIDTH * scale;
+                const int height = SCREEN_HEIGHT * scale;
+                const Eigen::Matrix4f viewport = Transform::getViewportMatrix(width, height);
+                const Transform prepared(eye, target, up, width, height, -.25f, -250.0f);
+                require(prepared.getBufferWidth() == width && prepared.getBufferHeight() == height,
+                        "A prepared transform lost its output dimensions.");
+                for (const Vector3f point : {target, Vector3f(-2, 1, -4), Vector3f(7, -3, 2)}) {
+                    const Eigen::Vector4f clip = projection * view * Eigen::Matrix4f::Identity()
+                                              * Eigen::Vector4f(point.x(), point.y(), point.z(), 1.0f);
+                    const Eigen::Vector4f ndc(clip.x() / clip.w(), clip.y() / clip.w(), clip.z() / clip.w(), 1.0f);
+                    const Eigen::Vector4f expected = viewport * ndc;
+                    float clipW;
+                    const Vector3f actual = prepared.apply(point, clipW);
+                    requireNear(actual, expected.head<3>(), "Prepared matrices changed projected coordinates.");
+                    require(std::abs(clipW - clip.w()) < 2e-5f,
+                            "Prepared matrices lost the original clip w needed for interpolation.");
+                    float legacyW;
+                    requireNear(actual, Transform::transform(point, eye, target, up, legacyW,
+                                                            -.25f, -250.0f, width, height),
+                                "The compatibility transform differs from the prepared transform.");
+                }
+            }
+        }
+    });
+
     run("parallel up has a finite orthonormal fallback", [] {
         const Vector3f eye(2.0f, 6.0f, -3.0f);
         const Vector3f target(2.0f, 1.0f, -3.0f);
