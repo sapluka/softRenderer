@@ -1,13 +1,4 @@
 #include "scene.h"
-#include "parameter.h"
-#include "transform.h"
-#include <Eigen/core>
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <iostream>
-#include <string>
-#include <thread>
 
 scene::scene(objLoader& model, rasterizer& rasterizer, camera& camera):
     model_(model),
@@ -49,7 +40,12 @@ void scene::createWindow(int width, int height, const char* title)
         glfwTerminate();
         return;
     }
-    
+
+    glfwSetWindowUserPointer(window, this);
+    glfwSetScrollCallback(window, [](GLFWwindow* window, double, double yOffset) {
+        scene* currentScene = static_cast<scene*>(glfwGetWindowUserPointer(window));
+        currentScene->scrollOffset += yOffset;
+    });
 
 }
 
@@ -88,7 +84,7 @@ void scene::render() {
             // 清除屏幕
         glClearColor(0.1f, 0.1f, 0.6f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        checkRotate(window);
+        checkCamera(window);
 
         // 渲染场景
         //这里我们set了一个buffer，这个buffer是相对于摄像机的。我们标记了所有intersected triangles，
@@ -103,6 +99,16 @@ void scene::render() {
         glfwSwapBuffers(window);
         //下面这几行在打印渲染时间和更改标题
         rasterizer_.clear();
+    }
+}
+
+void scene::checkCamera(GLFWwindow* window)
+{
+    checkRotate(window);
+    if(scrollOffset != 0.0)
+    {
+        zoomCamera(scrollOffset);
+        scrollOffset = 0.0;
     }
 }
 
@@ -159,6 +165,14 @@ void scene::rotateCamera(double x,double y, double u, double v)
 }
 
 
+
+void scene::zoomCamera(double scroll)
+{
+    const Eigen::Vector3f target = camera_.getTarget();
+    const Eigen::Vector3f offset = camera_.getPosition() - target;
+    const float scale = std::pow(0.9f, static_cast<float>(scroll));
+    camera_.setPosition(target + offset * scale);
+}
 
 void scene::sync()
 {
