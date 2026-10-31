@@ -58,6 +58,7 @@ class rasterizer {
         void updateDepthBuffer(const std::vector<Eigen::Vector3f>& screenTriangle,
                                std::vector<std::vector<float>>& buffer, int x, int y);
         float getShadowVisibility(const Eigen::Vector3f& worldPos) const;
+        float sampleCompareBilinear(float x, float y, float z) const;
         
         void rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
             const ScreenTriangle& screenTriangle,

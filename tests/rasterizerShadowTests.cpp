@@ -9,6 +9,9 @@ struct RasterizerShadowTestAccess {
     static float visibility(const rasterizer& renderer, const Eigen::Vector3f& point) {
         return renderer.getShadowVisibility(point);
     }
+    static float bilinearVisibility(const rasterizer& renderer, float x, float y, float z) {
+        return renderer.sampleCompareBilinear(x, y, z);
+    }
     static const std::vector<std::vector<float>>& lightDepths(const rasterizer& renderer) {
         return renderer.zBufferLight;
     }
@@ -126,6 +129,13 @@ float centerDepth(const rasterizer& renderer) {
 void requireVisibility(const rasterizer& renderer, const Vector3f& point, float expected,
                        const std::string& message) {
     require(RasterizerShadowTestAccess::visibility(renderer, point) == expected, message);
+}
+
+// The fixture light is at the origin, looking along -Z with +Y up.
+Vector3f worldPointAtLightPixel(float x, float y, int width, int height) {
+    const Eigen::Matrix4f projection = Transform::getProjectionMatrix();
+    return Vector3f((2.0f * x / width - 1.0f) * 4.0f / projection(0, 0),
+                    (1.0f - 2.0f * y / height) * 4.0f / projection(1, 1), -4.0f);
 }
 } // namespace
 
@@ -274,6 +284,72 @@ int main() {
             require(std::abs(visibility - (9 - blocked) / 9.0f) < 1e-6f,
                     "PCF did not average the nine independent depth comparisons.");
         }
+    });
+
+    run("bilinear PCF interpolates visibility and respects texel centers", [&] {
+        RasterizerShadowTestAccess::resizeLight(renderer, 4, 4);
+        RasterizerShadowTestAccess::fillLightDepth(renderer, .8f);
+        RasterizerShadowTestAccess::setLightDepth(renderer, 1, 1, .2f);
+        RasterizerShadowTestAccess::setLightDepth(renderer, 2, 2, .2f);
+        require(RasterizerShadowTestAccess::bilinearVisibility(renderer, 1.5f, 1.5f, .5f) == 0.0f,
+                "A sample at a blocked texel center blended unrelated visibility.");
+        require(RasterizerShadowTestAccess::bilinearVisibility(renderer, 2.5f, 1.5f, .5f) == 1.0f,
+                "A sample at a lit texel center blended unrelated visibility.");
+        require(std::abs(RasterizerShadowTestAccess::bilinearVisibility(renderer, 2, 2, .5f) - .5f) < 1e-6f,
+                "The sampler interpolated depth before comparing instead of filtering visibility.");
+        for (float tx : {.1f, .37f, .8f}) {
+            for (float ty : {.2f, .63f, .9f}) {
+                const float actual = RasterizerShadowTestAccess::bilinearVisibility(
+                    renderer, 1.5f + tx, 1.5f + ty, .5f);
+                const float expected = tx * (1.0f - ty) + (1.0f - tx) * ty;
+                require(std::abs(actual - expected) < 1e-6f,
+                        "Fractional shadow coordinates did not produce bilinear comparison weights.");
+            }
+        }
+    });
+
+    run("3x3 PCF changes continuously across horizontal and vertical texel boundaries", [&] {
+        shader.setLight(source);
+        const float receiverDepth = Transform::transform(receiverPoint, source.getPosition(),
+            source.getTarget(), source.getUp()).z();
+        for (bool horizontal : {true, false}) {
+            RasterizerShadowTestAccess::resizeLight(renderer, 9, 9);
+            for (int y = 0; y < 9; ++y)
+                for (int x = 0; x < 9; ++x)
+                    if ((horizontal ? x : y) < 4)
+                        RasterizerShadowTestAccess::setLightDepth(renderer, x, y, receiverDepth - .01f);
+            float previous = -1.0f;
+            for (int step = 0; step <= 20; ++step) {
+                const float coordinate = 3.5f + step * .05f;
+                const Vector3f point = worldPointAtLightPixel(horizontal ? coordinate : 4.5f,
+                    horizontal ? 4.5f : coordinate, 9, 9);
+                const float actual = RasterizerShadowTestAccess::visibility(renderer, point);
+                const float expected = (coordinate - 2.5f) / 3.0f;
+                require(std::abs(actual - expected) < 3e-6f && actual >= previous - 1e-6f,
+                        "PCF retained the old integer-coordinate steps instead of a continuous ramp.");
+                previous = actual;
+            }
+            const Vector3f before = worldPointAtLightPixel(horizontal ? 3.999f : 4.5f,
+                horizontal ? 4.5f : 3.999f, 9, 9);
+            const Vector3f after = worldPointAtLightPixel(horizontal ? 4.001f : 4.5f,
+                horizontal ? 4.5f : 4.001f, 9, 9);
+            require(std::abs(RasterizerShadowTestAccess::visibility(renderer, after)
+                             - RasterizerShadowTestAccess::visibility(renderer, before)) < .001f,
+                    "Crossing an integer texel boundary still caused a visible jump.");
+        }
+    });
+
+    run("bilinear PCF blends unoccluded border values safely", [&] {
+        RasterizerShadowTestAccess::resizeLight(renderer, 2, 2);
+        RasterizerShadowTestAccess::fillLightDepth(renderer, .2f);
+        require(RasterizerShadowTestAccess::bilinearVisibility(renderer, .5f, .5f, .5f) == 0.0f,
+                "A blocked border texel center became unoccluded.");
+        require(std::abs(RasterizerShadowTestAccess::bilinearVisibility(renderer, 0, .5f, .5f) - .5f) < 1e-6f,
+                "An edge sample did not interpolate valid and missing comparison results.");
+        require(std::abs(RasterizerShadowTestAccess::bilinearVisibility(renderer, 0, 0, .5f) - .75f) < 1e-6f,
+                "A corner sample did not handle all three missing neighbors.");
+        require(RasterizerShadowTestAccess::bilinearVisibility(renderer, -.5f, .5f, .5f) == 1.0f,
+                "A missing comparison sample was not treated as unoccluded.");
     });
 
     run("PCF treats missing border taps as unoccluded without reading outside the map", [&] {

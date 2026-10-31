@@ -115,26 +115,42 @@ float rasterizer::getShadowVisibility(const Eigen::Vector3f& worldPos) const
     // 这张二维深度图只覆盖光源视锥内的区域。
     if(clipW <= 0.0f || lightPos.x() < 0.0f || lightPos.x() >= width || lightPos.y() < 0.0f || lightPos.y() >= height
        || lightPos.z() < -1.0f || lightPos.z() > 1.0f) return 1.0f;
-    const int x = static_cast<int>(lightPos.x());
-    const int y = static_cast<int>(lightPos.y());
-    constexpr float shadowBias = 1e-4f;
     float visibility = 0.0f;
     for(int i = -1; i <= 1; ++i)
     {
         for(int j = -1; j <= 1; ++j)
         {
-            const int sample_x = x + i;
-            const int sample_y = y + j;
-            // 与视锥外的查询保持一致：没有记录的区域按无遮挡处理。
-            if(sample_x < 0 || sample_x >= width || sample_y < 0 || sample_y >= height)
-            {
-                visibility += 1.0f;
-                continue;
-            }
-            if(lightPos.z() <= zBufferLight[sample_y][sample_x] + shadowBias) visibility += 1.0f;
+            visibility += sampleCompareBilinear(lightPos.x() + i, lightPos.y() + j, lightPos.z());
         }
     }
     return visibility / 9.0f;
+}
+
+float rasterizer::sampleCompareBilinear(float x, float y, float z) const
+{
+    // 下面这两步是为了让某个点回到他靠近的中心的左上角那一格
+    const float sx = x - 0.5f;
+    const float sy = y - 0.5f;
+    const int x0 = static_cast<int>(std::floor(sx));
+    const int y0 = static_cast<int>(std::floor(sy));
+    const float tx = sx - x0;
+    const float ty = sy - y0;
+    const int height = static_cast<int>(zBufferLight.size());
+    const int width = static_cast<int>(zBufferLight.front().size());
+    constexpr float shadowBias = 1e-4f;
+    const auto compareDepth = [&](int sample_x, int sample_y) {
+        // 与视锥外的查询保持一致：没有记录的区域按无遮挡处理。
+        if(sample_x < 0 || sample_x >= width || sample_y < 0 || sample_y >= height) return 1.0f;
+        return z <= zBufferLight[sample_y][sample_x] + shadowBias ? 1.0f : 0.0f;
+    };
+    const float v00 = compareDepth(x0, y0);
+    const float v10 = compareDepth(x0 + 1, y0);
+    const float v01 = compareDepth(x0, y0 + 1);
+    const float v11 = compareDepth(x0 + 1, y0 + 1);
+    // 先比较深度，再插值四个可见性；不对深度值本身插值。
+    const float top = (1.0f - tx) * v00 + tx * v10;
+    const float bottom = (1.0f - tx) * v01 + tx * v11;
+    return (1.0f - ty) * top + ty * bottom;
 }
 
 void rasterizer::rasterizePixel(const objLoader::Triangle& triangle, const objLoader::Material& material,
