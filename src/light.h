@@ -11,6 +11,8 @@
 class light {
     private:
         Eigen::Vector3f position;
+        Eigen::Vector3f target = Eigen::Vector3f::Zero();
+        Eigen::Vector3f up = Eigen::Vector3f::UnitZ();
         Eigen::Vector3f color;
         float intensity;
     
@@ -24,6 +26,11 @@ class light {
             intensity = 1.0f;
         }
         Eigen::Vector3f getPosition() const { return position; }
+        Eigen::Vector3f getTarget() const { return target; }
+        Eigen::Vector3f getUp() const { return up; }
         Eigen::Vector3f getColor() const { return color; }
         float getIntensity() const { return intensity; }
+        void setPosition(const Eigen::Vector3f& pos) { position = pos; }
+        void setTarget(const Eigen::Vector3f& tar) { target = tar; }
+        void setUp(const Eigen::Vector3f& newUp) { up = newUp.normalized(); }
 };
